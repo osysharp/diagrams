@@ -1,0 +1,87 @@
+using Osysharp.Diagrams;
+using Osysharp.Workflow;
+
+// A board: three cards as nodes, two links as edges — every field the canvas reads left at its default name.
+entity Card {
+  [MaxLength(60)] string Title;
+  double X;
+  double Y;
+  security { allow read, create, update, delete when IsAuthenticated || IsAnonymous; }
+}
+
+entity Link {
+  Card Source;
+  Card Target;
+  security { allow read, create, update, delete when IsAuthenticated || IsAnonymous; }
+}
+
+// A workflow to picture.
+enum TicketStatus { Open, [Label("In progress")] Working, Done, Dropped }
+
+entity Ticket {
+  [MaxLength(60)] string Subject;
+  TicketStatus Status;
+  security { allow read, create, update when IsAuthenticated || IsAnonymous; }
+}
+
+workflow Support {
+  Tracks    = Ticket.Status;
+  Autostart = true;
+  Initial   = Open;
+
+  event Start();
+  event Finish();
+  event Drop();
+
+  state Open {
+    subscribe Start();
+    on Start { goto Working; }
+  }
+
+  state Working {
+    subscribe Finish();
+    on Finish { goto Done; }
+  }
+
+  on Drop { goto Dropped; }
+
+  terminal success Done { }
+  terminal cancel Dropped { }
+}
+
+FlowNodeType[] CardTypes() {
+  return [ new FlowNodeType { Name = "Card", Ports = [
+    new FlowPort { Id = "in", Kind = "target", Side = "left" },
+    new FlowPort { Id = "out", Kind = "source", Side = "right" } ] } ];
+}
+
+[Route("/board")] [AllowAnonymous]
+component Board() {
+  live var cards = Card.OrderBy(c => c.Title);
+  live var links = Link.ToList();
+
+  render {
+    Box(h: "400px") {
+      FlowCanvas(nodes: cards, edges: links, nodeTypes: CardTypes(), labelField: "Title") { c => Text(c.Title); }
+    }
+  }
+}
+
+[Route("/support")] [AllowAnonymous]
+component SupportPicture() {
+  render {
+    Box(h: "400px") {
+      FlowCanvas(
+        nodes: Support.Graph.States,
+        edges: Support.Graph.Transitions,
+        nodeTypes: CardTypes(),
+        sourceField: "From",
+        targetField: "To",
+        labelField: "Label",
+        readOnly: true,
+        autoLayout: always,
+        highlighted: ["Open"]
+      ) { s => Text(s.Label); }
+    }
+  }
+}

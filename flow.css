@@ -1,0 +1,232 @@
+/* The FlowCanvas control's own chrome — the pane, the edges, the ports, the selection ring. Everything a node SAYS is
+   the app's Osy#, rendered into `.osy-flow__body` by the platform; nothing here styles inside it. Colours are the
+   app's theme tokens with a neutral fallback, so the canvas follows the app's look and its dark mode. */
+
+.osy-flow {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 240px;
+  overflow: hidden;
+  touch-action: none;           /* the pane owns pan + pinch; the page must not scroll under a drag */
+  user-select: none;
+  outline: none;
+  background-color: var(--colors-surface, Canvas);
+}
+/* The grid pans and zooms WITH the canvas: the shim sets background-size/-position from the view on every change. */
+.osy-flow[data-background="dots"] {
+  background-image: radial-gradient(circle, var(--colors-border, GrayText) 1px, transparent 1.2px);
+}
+.osy-flow[data-background="lines"] {
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--colors-border, GrayText) 70%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--colors-border, GrayText) 70%, transparent) 1px, transparent 1px);
+}
+.osy-flow:focus-visible { box-shadow: inset 0 0 0 2px var(--colors-primary, Highlight); }
+
+.osy-flow .xyflow__viewport {
+  position: absolute;
+  inset: 0 auto auto 0;
+  transform-origin: 0 0;
+  width: 0;
+  height: 0;
+}
+
+.osy-flow__edges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+.osy-flow__edge { pointer-events: visibleStroke; cursor: pointer; outline: none; }
+.osy-flow__edge-path {
+  fill: none;
+  /* Follows the app's TEXT colour rather than a guessed token: `colors.muted` is a SURFACE tone in the Ui kit's theme
+     and painted edges near-invisible (measured in the first screenshot). currentColor is right in light and dark. */
+  stroke: color-mix(in srgb, currentColor 45%, transparent);
+  stroke-width: 1.5;
+}
+.osy-flow__edge-hit { fill: none; stroke: transparent; stroke-width: 14; }
+.osy-flow__edge.selected .osy-flow__edge-path,
+.osy-flow__edge:focus-visible .osy-flow__edge-path { stroke: var(--colors-primary, Highlight); stroke-width: 2.5; }
+.osy-flow__connection { fill: none; stroke: var(--colors-primary, Highlight); stroke-width: 1.5; stroke-dasharray: 5 4; }
+
+.osy-flow__node {
+  position: absolute;
+  left: 0;
+  top: 0;
+  cursor: grab;
+  outline: none;
+  border-radius: 10px;
+}
+.osy-flow__node.readonly { cursor: default; }
+.osy-flow__node.dragging { cursor: grabbing; }
+.osy-flow__node.selected,
+.osy-flow__node:focus-visible { box-shadow: 0 0 0 2px var(--colors-primary, Highlight); }
+.osy-flow__body { user-select: text; }
+
+.osy-flow__handle {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  box-sizing: border-box;
+  background: var(--colors-surface, Canvas);
+  border: 2px solid color-mix(in srgb, currentColor 45%, transparent);
+  cursor: crosshair;
+  outline: none;
+  z-index: 1;
+}
+.osy-flow__handle.source { border-color: var(--colors-primary, Highlight); }
+.osy-flow__handle:focus-visible,
+.osy-flow__handle.pending { box-shadow: 0 0 0 3px var(--colors-primary, Highlight); }
+.osy-flow__handle[data-handlepos="left"]   { left: -6px;  top: 50%;  transform: translateY(-50%); }
+.osy-flow__handle[data-handlepos="right"]  { right: -6px; top: 50%;  transform: translateY(-50%); }
+.osy-flow__handle[data-handlepos="top"]    { top: -6px;   left: 50%; transform: translateX(-50%); }
+.osy-flow__handle[data-handlepos="bottom"] { bottom: -6px; left: 50%; transform: translateX(-50%); }
+.osy-flow.readonly .osy-flow__handle { cursor: default; }
+
+.osy-flow__status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Visually hidden, still read: the descriptions every node and edge is described by. */
+.osy-flow__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Edge labels — HTML over the edges and under the nodes, in the app's own type. */
+.osy-flow__labels {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.osy-flow__edge-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--colors-surface, Canvas);
+  border: 1px solid var(--colors-border, currentColor);
+  color: var(--colors-textsecondary, currentColor);
+  font-size: var(--fontsize-caption, 12px);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.osy-flow__edge-label.selected { border-color: var(--colors-primary, Highlight); color: var(--colors-primary, Highlight); }
+
+/* Shift + drag on the pane: the selection box. */
+.osy-flow__selection {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  border: 1px solid var(--colors-primary, Highlight);
+  background: color-mix(in srgb, var(--colors-primary, Highlight) 10%, transparent);
+  border-radius: 2px;
+}
+
+/* Zoom in / out / fit. */
+.osy-flow__controls {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-sm, 6px);
+  overflow: hidden;
+  background: var(--colors-surface, Canvas);
+  border: 1px solid var(--colors-border, GrayText);
+  box-shadow: var(--shadow-raised, none);
+}
+.osy-flow__control {
+  display: grid;
+  place-items: center;
+  width: 100%;                  /* a button is not stretched by its flex column on its own: say it, or the glyph rows */
+  min-width: 30px;              /* stop short of the panel once an app tool's words make it wider */
+  height: 30px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--colors-border, GrayText);
+  background: transparent;
+  color: var(--colors-onsurface, CanvasText);
+  cursor: pointer;
+}
+.osy-flow__control:last-child { border-bottom: 0; }
+.osy-flow__control:hover { background: var(--colors-muted, ButtonFace); }
+.osy-flow__control:focus-visible { outline: 2px solid var(--colors-primary, Highlight); outline-offset: -2px; }
+.osy-flow__control svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+
+/* The overview. */
+.osy-flow__minimap {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 4;
+  width: 200px;
+  height: 140px;
+  border-radius: var(--radius-sm, 6px);
+  overflow: hidden;
+  background: var(--colors-surface, Canvas);
+  border: 1px solid var(--colors-border, GrayText);
+  box-shadow: var(--shadow-raised, none);
+  cursor: grab;
+}
+.osy-flow__minimap svg { display: block; width: 100%; height: 100%; }
+.osy-flow__minimap-nodes rect { fill: color-mix(in srgb, var(--colors-onsurface, CanvasText) 22%, transparent); }
+.osy-flow__minimap-nodes rect.selected { fill: var(--colors-primary, Highlight); }
+.osy-flow__minimap-mask { fill: color-mix(in srgb, var(--colors-onsurface, CanvasText) 8%, transparent); }
+
+/* The app's own tools: text buttons under the canvas's glyph buttons, as wide as their words. */
+.osy-flow__tool {
+  width: auto;
+  min-width: 30px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: var(--fontsize-label, 13px);
+  white-space: nowrap;
+}
+.osy-flow__control[hidden] { display: none; }
+
+/* A run's place in a picture: the CURRENT node breathes; nodes it passed through are done; its path is drawn. */
+.osy-flow__node.current {
+  box-shadow: 0 0 0 3px var(--colors-primary, Highlight), 0 0 0 9px color-mix(in srgb, var(--colors-primary, Highlight) 18%, transparent);
+  animation: osy-flow-breathe 2.4s ease-in-out infinite;
+}
+.osy-flow__node.visited { opacity: 0.72; }
+.osy-flow__edge.travelled .osy-flow__edge-path { stroke: var(--colors-primary, Highlight); stroke-width: 2; }
+.osy-flow__edge.active .osy-flow__edge-path {
+  stroke: var(--colors-primary, Highlight);
+  stroke-width: 2.5;
+  stroke-dasharray: 8 6;
+  animation: osy-flow-flow 0.9s linear infinite;
+}
+@keyframes osy-flow-breathe {
+  0%, 100% { box-shadow: 0 0 0 3px var(--colors-primary, Highlight), 0 0 0 6px color-mix(in srgb, var(--colors-primary, Highlight) 22%, transparent); }
+  50%      { box-shadow: 0 0 0 3px var(--colors-primary, Highlight), 0 0 0 12px color-mix(in srgb, var(--colors-primary, Highlight) 6%, transparent); }
+}
+@keyframes osy-flow-flow { to { stroke-dashoffset: -14; } }
+@media (prefers-reduced-motion: reduce) {
+  .osy-flow__node.current, .osy-flow__edge.active .osy-flow__edge-path { animation: none; }
+}
+
+/* A node on its way out: it no longer takes a pointer, and it never covers the one taking its place. */
+.osy-flow__node.leaving { pointer-events: none; z-index: 0; }

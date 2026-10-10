@@ -1,0 +1,10 @@
+// The producer's test project for Osysharp.Diagrams — the smallest real consumer of the canvas: a board of rows and a
+// workflow's picture. Gestures (drag, connect, pan, zoom, box select) need a real compositor and are proven in
+// Chromium by `osy-client/tests/e2e/visual/suites/demo-flow-demo.mjs`; what is true without one is here.
+app FlowKitTests {
+  use Osysharp.Ui;
+  use Osysharp.Diagrams@0;
+  use Osysharp.Workflow;
+  model "model/**/*.osy";
+  tests "**/*.test.osy";
+}

@@ -1,0 +1,18 @@
+// Osysharp.Diagrams as a package — a manifest that carries a CONTROL and its chunk.
+//
+// `flow.osy` declares `control FlowCanvas`; `flow.js` is its shim; `xyflow-system.js` (chunk XY — React Flow's
+// framework-independent core, MIT) loads at mount and `dagre-layout.js` (chunk Layout — dagre, MIT) only when a canvas
+// lays itself out. The platform re-hashes each against `osyrin.lock` at load. `tests/` is the kit's own test project.
+package Osysharp.Diagrams {
+  version "0.3.2";
+  minPlatform "0.9.0";
+  contract    "1.1";
+  summary     "a node/edge modelling canvas: pan, zoom, drag, connect — nodes rendered by the app's own Osy#.";
+
+  model    "*.osy";
+  controls "osyrin.lock";
+  controls "flow.js";
+  controls "xyflow-system.js";
+  controls "dagre-layout.js";
+  tests    "tests";
+}

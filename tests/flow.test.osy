@@ -1,0 +1,42 @@
+// What the canvas promises that a test can see without a compositor: rows become nodes, the selection starts empty,
+// a workflow's whole graph is readable and drawable. (Drag, connect, pan, zoom, box select, the keyboard model and
+// motion are proven in a real Chromium — osy-client/tests/e2e/visual/suites/demo-flow-demo.mjs.)
+using Osysharp.Diagrams;
+using Osysharp.Workflow;
+
+[TestFixture]
+void ThreeCards() {
+  var a = new Card { Title = "Draft", X = 0, Y = 0 };
+  var b = new Card { Title = "Review", X = 240, Y = 0 };
+  var c = new Card { Title = "Publish", X = 480, Y = 0 };
+  new Link { Source = a, Target = b };
+  new Link { Source = b, Target = c };
+}
+
+/// Every row handed to `nodes` is a node on the canvas, and nothing is selected until someone picks.
+[Test(ThreeCards)]
+void every_row_is_a_node_and_nothing_starts_selected() {
+  Ui.Visit("/board");
+  Assert.Probe("FlowCanvas", "nodes", 3);
+  Assert.Probe("FlowCanvas", "selection", 0);
+}
+
+/// `<Wf>.Graph` holds every state — named by the tracked enum's [Label] — and every declared transition, with the
+/// workflow-level `on Drop` expanded to each live state it leaves.
+[Test]
+void a_workflow_graph_holds_every_state_and_every_transition() {
+  var g = Support.Graph;
+  Assert.Equal(4, g.States.Count());
+  Assert.Equal("In progress", g.States.Where(s => s.Name == "Working").Select(s => s.Label).First());
+  Assert.True(g.States.Where(s => s.Name == "Open").Select(s => s.IsInitial).First());
+  Assert.Equal("Success", g.States.Where(s => s.Name == "Done").Select(s => s.Outcome).First());
+  Assert.Equal(4, g.Transitions.Count());
+  Assert.Equal(2, g.Transitions.Count(t => t.To == "Dropped"));    // `on Drop`, from Open and from Working
+}
+
+/// A workflow's graph draws on the canvas directly: its states are VALUES (no row id), keyed by their `Id`.
+[Test]
+void a_workflow_graph_draws_one_node_per_state() {
+  Ui.Visit("/support");
+  Assert.Probe("FlowCanvas", "nodes", 4);
+}

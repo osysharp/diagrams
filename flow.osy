@@ -1,0 +1,145 @@
+// Flow@0 — a node/edge modelling CANVAS (`using Osysharp.Diagrams;`). Preview (0.x); reference `osy docs ui-flow-kit`.
+//
+// The drawing and dragging are React Flow's framework-independent core, `@xyflow/system` (MIT), shipped as a chunk.
+// What a node LOOKS like is the app's own Osy#: each node is rendered through the per-node-type template the call
+// site writes (`slot Step { s => … }`), into an element this control positions. The control owns WHERE a node is; the
+// app owns WHAT it says — and every binding, action and read inside it is ordinary Osy#, secured and live as anywhere.
+//
+// Nodes and edges are the app's own ROWS. A move and a new edge come back as events carrying those rows, so the app
+// writes them through its unit of work like any other edit — which is what gives it undo, conflicts and security for
+// free, and why the control holds no model of its own. Step-by-step undo is the unit of work's SAVEPOINTS: the
+// `gesture` event comes first in every edit, the app marks there (`UnitOfWork.Mark(label)`), and Ctrl+Z is
+// `UnitOfWork.Undo()` on a button with `shortcut: "Mod+Z"`.
+
+namespace Osysharp.Diagrams;
+
+/// A button of the app's own in the canvas's corner toolbar — beside zoom and fit, so an editor's verbs (Save, Discard,
+/// a tidy in another direction) sit where the person is looking. `Run` is any action: the app's own, or one of the
+/// canvas's commands (`Run = FlowCanvas.Layout`).
+public class FlowTool {
+  public string Label;
+  public Action Run;
+}
+
+/// One connection point on a node type. `Id` names it (an edge records which port it leaves and enters by);
+/// `Kind` is `source` (edges leave) or `target` (edges arrive); `Side` is where on the node's border it sits.
+public class FlowPort {
+  public string Id;
+  public string Kind;
+  public string Side;
+}
+
+/// A node TYPE — a name the app's rows carry and its template is written against, and the ports every node of that
+/// type has. `slots from nodeTypes.Name` makes each name a template the call site writes: `slot Step { s => … }`.
+public class FlowNodeType {
+  public string Name;
+  public FlowPort[] Ports;
+}
+
+/// A node-and-edge modelling canvas: pan, zoom, drag nodes, draw edges between ports, select and delete — by mouse
+/// and by keyboard. Nodes and edges are the app's own rows; each node renders through the template written for its type.
+/// e.g. `FlowCanvas(nodes: steps, edges: links, nodeTypes: types, nodeMoved: Move, connected: Link) { slot Step { s => Text(s.Title); } }`
+control FlowCanvas<TNode, TEdge> {
+  contractVersion "1.1"
+  participation headless
+  // A canvas FILLS the box the app put it in: its content is all positioned, so it has no height of its own to grow to.
+  sizing fill
+  props {
+    /// The nodes — the app's rows. Each is positioned by `xField`/`yField` and rendered by the template of its type.
+    TNode[] nodes;
+    /// The edges — the app's rows. Each joins the node its `sourceField` names to the one its `targetField` names.
+    TEdge[] edges;
+    /// The node types, their ports, and the names the per-type templates are written against.
+    FlowNodeType[] nodeTypes;
+    /// Which field of a node row holds its type's `Name`. Omitted: every node is the FIRST type.
+    string? typeField;
+    /// Which fields of a node row hold its position, in canvas units.
+    string xField = "X";
+    string yField = "Y";
+    /// Which fields of an edge row reference its two nodes.
+    string sourceField = "Source";
+    string targetField = "Target";
+    /// Which fields of an edge row name the ports it uses. Omitted: the first source / target port of each node.
+    string? sourcePortField;
+    string? targetPortField;
+    /// Which field of a node row is its NAME — what a screen reader says for it, and what an edge "from X to Y" and an
+    /// announcement use. Omitted: the words the node's template rendered (buttons included), so name it when you can.
+    string? labelField;
+    /// Which field of an edge row is its LABEL — drawn on the edge and read as part of its name. Omitted: no label.
+    string? edgeLabelField;
+    /// A picture, not an editor: nothing moves, nothing connects, nothing is deleted. Pan and zoom still work.
+    bool readOnly = false;
+    [Values(bezier, smoothstep, straight)] string edgeShape = "bezier";
+    /// Snap moved nodes to this grid, in canvas units — a drag lands on it and an arrow press moves one step of it.
+    /// 0 = no snapping (arrow keys move 10).
+    int snap = 0;
+    /// The canvas's background: a dot grid, a line grid, or nothing. The grid follows `snap` when there is one.
+    [Values(dots, lines, none)] string background = "dots";
+    /// Zoom in / zoom out / fit buttons in the corner.
+    bool controls = true;
+    /// A small overview of the whole canvas in the other corner, with the current view marked; drag it to pan.
+    bool minimap = false;
+    /// When the canvas lays the graph out ITSELF (layered, edges flowing one way, nodes never overlapping):
+    ///   initial — once, for a graph whose nodes have no positions yet (every node at the same point); in an editor the
+    ///             result arrives as ordinary `nodeMoved` events, so the app keeps it like any other edit
+    ///   always  — every time, ignoring the position fields: a PICTURE of a structure (a workflow's states)
+    ///   none    — never; positions are the app's alone
+    /// The Tidy button and the `Layout` command lay it out on demand in any mode.
+    [Values(initial, always, none)] string autoLayout = "initial";
+    /// Which way a laid-out graph flows.
+    [Values(right, down, left, up)] string layoutDirection = "right";
+    /// The app's own buttons in the corner toolbar (Save, Discard, …). Empty: just zoom, fit and tidy.
+    FlowTool[] tools = [];
+    /// The nodes that are CURRENT — where a run is now. Drawn with a ring that breathes, read as "current" to a screen
+    /// reader, and announced when it moves. Node keys: an entity row's id, or a value's `Id` (a workflow state's name).
+    string[] highlighted = [];
+    /// The nodes a run has already PASSED THROUGH. Drawn as done; an edge between two of them (or into the current one)
+    /// is drawn as travelled, and the edge that brought the run to where it is now flows.
+    string[] visited = [];
+  }
+  events {
+    /// Raised ONCE before the events of each editing gesture — a drag, an arrow-key move, a new connection, a Delete,
+    /// a lay-out — with a sentence naming it ("Move Approve?", "Connect Receive request to Fulfil", "Remove 2 nodes").
+    /// Mark the unit of work here and one Ctrl+Z takes the whole gesture back, however many rows it moved:
+    /// `action Gesture(string what) { UnitOfWork.Mark(what); }` … `gesture: Gesture`.
+    gesture(string label);
+    /// A node was dropped at a new position (after a drag, or after arrow keys).
+    nodeMoved(TNode node, double x, double y);
+    /// The person drew an edge from one node's source port to another's target port.
+    connected(TNode source, TNode target, string sourcePort, string targetPort);
+    /// The person deleted a selected edge (Delete / Backspace).
+    edgeRemoved(TEdge edge);
+    /// The person deleted a selected node (Delete / Backspace).
+    nodeRemoved(TNode node);
+    /// A node became the PRIMARY selection (the one last clicked or focused).
+    nodeSelected(TNode node);
+    /// The selection changed — every selected node and edge, after a click, Shift/Ctrl/Cmd-click, Space, Ctrl/Cmd+A,
+    /// a Shift+drag box, or a row leaving. Empty lists when it was cleared.
+    selectionChanged(TNode[] nodes, TEdge[] edges);
+  }
+  slots from nodeTypes.Name
+  // XY is the gestures and geometry, loaded at mount; Layout is the auto-layout engine (dagre), loaded only the first
+  // time a canvas lays itself out — a page that only draws stored positions never downloads it.
+  chunks { XY; Layout; }
+  commands {
+    /// Lay the graph out now (layered, in `layoutDirection`). In an editor every node that moved raises `nodeMoved`,
+    /// so the result is a batch of ordinary edits the app commits — or discards.
+    Layout;
+    /// Pan and zoom so the whole graph is in view.
+    FitView;
+  }
+  probe {
+    /// How many nodes are on the canvas.
+    int nodes;
+    /// How many edges are drawn.
+    int edges;
+    /// The current zoom factor.
+    double zoom;
+    /// The id of the selected node or edge, or nothing.
+    string? selected;
+    /// The id of the node or edge that has keyboard focus, or nothing.
+    string? focused;
+    /// How many nodes and edges are selected.
+    int selection;
+  }
+}
