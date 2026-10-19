@@ -19,6 +19,10 @@
 
 import type { FlowCanvasHandle, FlowCanvasHost, FlowCanvasProps } from './flow.control';
 import FLOW_CSS from './flow.css';
+// Types only — and ONE small function. The layout itself is a chunk (see `loadLayout`); `arrowAt` is all of it that an
+// edge between two ports needs, and the bundler keeps just that.
+import type { Audit, Direction, Layout, LayoutEdge, LayoutNode, LayoutOptions } from './layout';
+import { arrowAt } from './layout';
 
 type Host = FlowCanvasHost;
 type Props = FlowCanvasProps;
@@ -77,17 +81,17 @@ interface XyModule {
   infiniteExtent: unknown;
 }
 
-/** The `Layout` chunk's surface — `@dagrejs/dagre`'s graph and layout, stated structurally as XY's is. */
-interface DagreGraph {
-  setGraph(g: Record<string, unknown>): void;
-  setDefaultEdgeLabel(f: () => Record<string, unknown>): void;
-  setNode(id: string, n: { width: number; height: number }): void;
-  setEdge(source: string, target: string): void;
-  node(id: string): { x: number; y: number; width: number; height: number } | undefined;
-}
+/** The `Layout` chunk's surface — the kit's own layered layout (`layout.ts`), built to a chunk of its own. */
 interface LayoutModule {
-  Graph: new (o?: Record<string, unknown>) => DagreGraph;
-  layout(g: DagreGraph): void;
+  layout(nodes: readonly LayoutNode[], edges: readonly LayoutEdge[], options?: LayoutOptions): Layout;
+  audit(l: Layout, nodes: readonly LayoutNode[], edges: readonly LayoutEdge[]): Audit;
+  fingerprint(l: Layout): string;
+}
+/** The last layout, and what was counted about it. */
+interface Plan {
+  layout: Layout; audit: Audit; ms: number; print: string; sizes: Record<'along' | 'down', { w: number; h: number }> | null;
+  /** Laying the same graph out once more — the question a test asks: is the picture the same picture? */
+  again: () => string;
 }
 
 const LIB = 'osy';          // xyflow's class prefix: `.osy-flow__handle` is what XYHandle looks for under the pointer
@@ -103,6 +107,7 @@ const HELP_CANVAS = 'Canvas. Tab moves between nodes and their ports. On a node:
   + 'E to the next edge, Delete removes it. Space adds a node to the selection or takes it out; Control A selects every '
   + 'node; arrow keys and Delete then act on the whole selection. Shift L tidies the layout. Plus and minus zoom; zero '
   + 'fits the picture. Question mark repeats this.';
+const NOMINAL = { width: 160, height: 48 };   // a node's size where nothing can be measured (a DOM with no layout)
 const HELP_READONLY = 'Canvas, read only. Tab moves between nodes. On a node: Alt with an arrow goes to the nearest node '
   + 'that way and E goes to its edges. On an edge: S and T go to its two ends, E to the next edge. Plus and minus zoom; '
   + 'zero fits the picture.';
@@ -196,7 +201,17 @@ class FlowCanvas {
    *  fields are ignored). Re-laid out when the set of nodes or edges changes. */
   private laidOut = new Map<string, { x: number; y: number }>();
   private laidOutKey = '';
+  private laidOutShape = '';
   private layingOut = false;
+  /** The last layout: where every node is and, in a picture, how every edge runs. */
+  private plan: Plan | null = null;
+  /** True while nodes are on their way to a new layout — the routes belong to where they are going, not where they are. */
+  private gliding = false;
+  /** The person panned or zoomed: a picture stops re-fitting itself to its box until they press Fit. */
+  private userMoved = false;
+  private rootResize: ResizeObserver | null = null;
+  private outline: HTMLDivElement;
+  private outlineText = '';
   private glide: number | null = null;
   private highlightKey = '';
   /** Set once the first picture is on screen: from then on, what ARRIVES and LEAVES moves; the first paint does not. */
@@ -240,7 +255,16 @@ class FlowCanvas {
     this.status.setAttribute('role', 'status');
     this.status.setAttribute('aria-live', 'polite');
     this.root.append(this.viewport, this.status, this.helpNode, this.helpEdge);
-    this.el.replaceChildren(this.root);
+    // The picture IN WORDS, beside the canvas rather than inside it: the canvas is an `application` (its keys are its
+    // own), and a list inside one is not something a screen reader's reading keys reach.
+    this.outline = this.doc.createElement('div');
+    this.outline.className = 'osy-flow__sr';
+    this.outline.setAttribute('role', 'group');
+    this.outline.setAttribute('aria-label', 'The diagram in words');
+    this.el.replaceChildren(this.outline, this.root);
+    const moved = (e: Event) => { if (!(e.target as Element).closest?.('.osy-flow__controls, .osy-flow__minimap')) this.userMoved = true; };
+    this.root.addEventListener('wheel', moved, { passive: true });
+    this.root.addEventListener('pointerdown', moved);
     this.root.addEventListener('keydown', this.onKeyDown);
     // CAPTURE phase: a box selection (Shift + drag on the empty pane) has to switch the pane's pan off BEFORE d3-zoom's
     // own mousedown listener on this same element decides to start a pan.
@@ -282,7 +306,19 @@ class FlowCanvas {
       }
       this.measure(updates);
     });
+    // A picture stays fitted to its box, and flows the way its box is shaped: both are re-read when the box changes.
+    this.rootResize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => this.boxChanged());
+    this.rootResize?.observe(this.root);
     this.sync();
+  }
+
+  /** `autoLayout: always` — a PICTURE: the canvas owns every position and routes every edge. */
+  private get picture(): boolean { return this.props.autoLayout === 'always'; }
+
+  private boxChanged() {
+    if (!this.picture || !this.plan || this.layingOut || this.destroyed) return;
+    if (this.directionFor(this.plan.sizes) !== this.plan.layout.direction) { void this.runLayout('auto'); return; }
+    if (!this.userMoved) void this.fit();
   }
 
   update(next: Props) {
@@ -295,6 +331,7 @@ class FlowCanvas {
     for (const v of this.views.values()) this.dropView(v);
     this.views.clear();
     this.resize?.disconnect();
+    this.rootResize?.disconnect();
     this.panZoom?.destroy();
     this.root.removeEventListener('keydown', this.onKeyDown);
     this.root.removeEventListener('mousedown', this.onPaneMouseDown, true);
@@ -307,9 +344,11 @@ class FlowCanvas {
   }
 
   layoutCommand() { void this.ready.then(() => this.runLayout('asked')); }
-  fitViewCommand() { void this.ready.then(() => this.fit(true)); }
+  fitViewCommand() { void this.ready.then(() => { this.userMoved = false; return this.fit(true); }); }
 
   probe() {
+    const plan = this.plan;
+    const a = plan?.audit;
     return {
       nodes: this.views.size,
       edges: this.edgeLayer.querySelectorAll('.osy-flow__edge').length,
@@ -317,6 +356,23 @@ class FlowCanvas {
       selected: this.selected?.id ?? null,
       focused: this.focusedId(),
       selection: this.selNodes.size + this.selEdges.size,
+      direction: plan?.layout.direction ?? '',
+      ranks: plan?.layout.ranks ?? 0,
+      crossings: a?.crossings ?? 0,
+      overlaps: a?.overlaps ?? 0,
+      throughNodes: a?.throughNodes ?? 0,
+      nodeOverlaps: a?.nodeOverlaps ?? 0,
+      labelsOnNodes: a?.labelsOnNodes ?? 0,
+      backward: a?.backward ?? 0,
+      returns: plan ? plan.layout.edges.filter((e) => e.reversed).length : 0,
+      endsNotLast: a?.endsNotLast ?? 0,
+      mainStraight: a?.mainStraight ?? false,
+      mainPath: plan?.layout.mainPath.join(' > ') ?? '',
+      layout: plan?.print ?? '',
+      stable: plan ? plan.again() === plan.print : false,
+      layoutMs: plan ? Math.round(plan.ms * 100) / 100 : 0,
+      edgesTaken: this.edgeLayer.querySelectorAll('.osy-flow__edge.taken').length,
+      outline: this.outlineText,
     };
   }
 
@@ -336,6 +392,9 @@ class FlowCanvas {
     const yField = p.yField ?? 'Y';
     const firstType = p.nodeTypes?.[0]?.Name ?? '';
     this.root.classList.toggle('readonly', this.readOnly);
+    this.root.classList.toggle('picture', this.picture);
+    this.root.classList.toggle('equal', this.picture && (p.nodeSizing ?? 'equal') === 'equal');
+    this.root.classList.toggle('has-run', (p.highlighted ?? []).length + (p.visited ?? []).length + (p.failed ?? []).length + (p.path ?? []).length > 0);
 
     const always = this.props.autoLayout === 'always';
     this.userNodes = rows.filter((r) => rid(r) !== '').map((r) => ({
@@ -379,7 +438,8 @@ class FlowCanvas {
       this.buildPorts(view);
       view.wrapper.classList.toggle('selected', !!u.selected);
       view.wrapper.classList.toggle('current', this.isCurrent(u.id));
-      view.wrapper.classList.toggle('visited', !this.isCurrent(u.id) && this.isVisited(u.id));
+      view.wrapper.classList.toggle('visited', !this.isCurrent(u.id) && !this.isFailed(u.id) && this.isVisited(u.id));
+      view.wrapper.classList.toggle('failed', this.isFailed(u.id));
       view.drag?.update(this.dragParams(view));
       this.place(view);
       remeasure.set(u.id, { id: u.id, nodeElement: view.wrapper, force: true });
@@ -419,9 +479,12 @@ class FlowCanvas {
     this.xy.updateNodeInternals(updates, this.nodeLookup, this.parentLookup, this.root, [0, 0]);
     this.drawEdges();
     const measured = this.userNodes.length > 0 && [...this.nodeLookup.values()].every((n) => n.measured?.width);
-    if (!measured) return;
     const mode = this.props.autoLayout ?? 'initial';
-    if (mode === 'always' && this.shapeKey() !== this.laidOutKey) { void this.runLayout('auto'); return; }
+    // A host that lays nothing out (a test DOM) never measures anything. A picture is still laid out there, at a
+    // nominal node size, so its ranks, its order and its routes are real — and a test can read them.
+    const blind = this.root.offsetWidth === 0 && [...this.views.values()].every((v) => v.wrapper.offsetWidth === 0);
+    if (!measured && !(blind && mode === 'always' && this.userNodes.length > 0)) return;
+    if (mode === 'always' && this.layoutKey() !== this.laidOutKey) { void this.runLayout('auto'); return; }
     if (!this.fitted) {
       this.fitted = true;
       if (mode === 'initial' && this.unpositioned()) { void this.runLayout('auto'); return; }
@@ -429,17 +492,107 @@ class FlowCanvas {
     }
   }
 
-  /** Fit the whole picture — or, `animated`, glide to it (unless the person asked for less motion). */
+  /** Fit the whole picture — or, `animated`, glide to it (unless the person asked for less motion). A laid-out
+   *  picture is fitted to ITS bounds — routes, loops and labels included — and never enlarged past 1:1, so three nodes
+   *  in a wide box stay the size they were written at. */
   private async fit(animated = false) {
     const r = this.root.getBoundingClientRect();
     if (!this.panZoom || r.width === 0) return;
+    if (this.picture && this.plan) {
+      const v = this.viewFor(this.plan.layout, r.width, r.height);
+      await this.panZoom.setViewport(v, { duration: animated ? this.motionMs() : 0 });
+      return;
+    }
     await this.xy!.fitViewport({
       nodes: this.nodeLookup, width: r.width, height: r.height, panZoom: this.panZoom, minZoom: 0.2, maxZoom: 1,
     }, { padding: 0.15, duration: animated ? this.motionMs() : 0 });
   }
 
+  /** The view that shows a picture whole and centred in a `W` × `H` box — and where the toolbar goes. The toolbar
+   *  takes the first CORNER the picture leaves empty (bottom-start first, where it always was); only when the picture
+   *  reaches into all four is the box taken to start beside the toolbar or to end above it, whichever leaves the
+   *  picture larger. */
+  private viewFor(l: Layout, W: number, H: number): { x: number; y: number; zoom: number } {
+    const pad = 20;
+    const w = l.width; const h = l.height;
+    const at = (left: number, bottom: number) => {
+      const zoom = Math.max(0.2, Math.min(1, (W - left - 2 * pad) / Math.max(1, w), (H - bottom - 2 * pad) / Math.max(1, h)));
+      return { x: left + (W - left - w * zoom) / 2, y: (H - bottom - h * zoom) / 2, zoom };
+    };
+    const v = at(0, 0);
+    const panel = this.controlsPanel;
+    if (!panel) return v;
+    const pw = panel.offsetWidth + 20; const ph = panel.offsetHeight + 20;
+    // Everything the picture draws, as boxes in the box's own pixels.
+    const boxes: [number, number, number, number][] = l.nodes.map((n) => [n.x, n.y, n.x + n.width, n.y + n.height]);
+    for (const e of l.edges) {
+      for (let i = 0; i + 1 < e.points.length; i++) {
+        const a = e.points[i]; const b = e.points[i + 1];
+        boxes.push([Math.min(a.x, b.x) - 4, Math.min(a.y, b.y) - 4, Math.max(a.x, b.x) + 4, Math.max(a.y, b.y) + 4]);
+      }
+      if (e.label) boxes.push([e.label.x - 40, e.label.y - 12, e.label.x + 40, e.label.y + 12]);
+    }
+    const free = (x0: number, y0: number) => !boxes.some(([bx0, by0, bx1, by1]) =>
+      v.x + bx1 * v.zoom > x0 && v.x + bx0 * v.zoom < x0 + pw && v.y + by1 * v.zoom > y0 && v.y + by0 * v.zoom < y0 + ph);
+    const corners: [string, number, number][] = [['bottom-start', 0, H - ph], ['bottom-end', W - pw, H - ph], ['top-end', W - pw, 0], ['top-start', 0, 0]];
+    const rtl = this.doc.defaultView?.getComputedStyle?.(this.root).direction === 'rtl';
+    for (const [name, x0, y0] of corners) {
+      if (!free(rtl ? W - pw - x0 : x0, y0)) continue;
+      this.root.dataset.controls = name;
+      return v;
+    }
+    this.root.dataset.controls = 'bottom-start';
+    const beside = at(pw, 0); const above = at(0, ph);
+    return above.zoom >= beside.zoom ? above : beside;
+  }
+
+  /** Which way a picture flows. Told, it is what the app said. `auto`: along the page's reading direction — unless the
+   *  picture would be drawn clearly larger flowing down, which is what a phone's narrow box comes to. */
+  private directionFor(sizes: Plan['sizes']): Direction {
+    const d = this.props.layoutDirection ?? 'auto';
+    if (d !== 'auto') return d as Direction;
+    const along: Direction = this.doc.defaultView?.getComputedStyle?.(this.root).direction === 'rtl' ? 'left' : 'right';
+    const W = this.root.clientWidth; const H = this.root.clientHeight;
+    if (!sizes || !W || !H) return along;
+    const zoom = (b: { w: number; h: number }) => Math.min(1, (W - 40) / Math.max(1, b.w), (H - 40) / Math.max(1, b.h));
+    return zoom(sizes.down) > zoom(sizes.along) * 1.15 ? 'down' : along;
+  }
+
   private isCurrent(id: string): boolean { return (this.props.highlighted ?? []).includes(id); }
-  private isVisited(id: string): boolean { return (this.props.visited ?? []).includes(id); }
+  private isVisited(id: string): boolean { return (this.props.visited ?? []).includes(id) || (this.props.path ?? []).includes(id); }
+  private isFailed(id: string): boolean { return (this.props.failed ?? []).includes(id); }
+
+  /** Which edges a run TOOK, and which one brought it to where it is now. Its way is `path` when the app knows it,
+   *  else the nodes it visited in the order given and then where it is; an edge between one and the next was taken.
+   *  A `visited` that is not a walk along the edges (a set in no order) falls back to "both ends were reached". */
+  private runEdges(): { taken: Set<string>; active: Set<string> } {
+    const p = this.props;
+    const taken = new Set<string>(); const active = new Set<string>();
+    const now = p.highlighted ?? [];
+    const exact = (p.path ?? []).length > 0;
+    const way = exact ? p.path! : [...(p.visited ?? []), ...now.filter((h) => !(p.visited ?? []).includes(h))];
+    const between = new Map<string, string[]>();
+    for (const r of this.edgeRows) {
+      const id = rid(r); const k = `${this.endOf(id, 'source')}\u0000${this.endOf(id, 'target')}`;
+      between.set(k, [...(between.get(k) ?? []), id]);
+    }
+    const steps: string[][] = [];
+    for (let i = 0; i + 1 < way.length; i++) steps.push(between.get(`${way[i]}\u0000${way[i + 1]}`) ?? []);
+    if (exact || (steps.length > 0 && steps.every((ids) => ids.length > 0))) {
+      steps.forEach((ids, i) => {
+        for (const id of ids) taken.add(id);
+        if (i === steps.length - 1 && now.includes(way[i + 1])) for (const id of ids) active.add(id);
+      });
+      return { taken, active };
+    }
+    const been = (n: string) => this.isVisited(n) || this.isCurrent(n);
+    for (const r of this.edgeRows) {
+      const id = rid(r); const s = this.endOf(id, 'source'); const t = this.endOf(id, 'target');
+      if (been(s) && been(t)) taken.add(id);
+      if (this.isVisited(s) && this.isCurrent(t)) active.add(id);
+    }
+    return { taken, active };
+  }
 
   /** A graph nobody has placed: more than one node and all of them at one point (the default 0,0 of a new row). */
   private unpositioned(): boolean {
@@ -455,56 +608,145 @@ class FlowCanvas {
       + this.edgeRows.map((r) => `${refId(r[sf])}>${refId(r[tf])}`).sort().join(',');
   }
 
+  /** Everything a picture's layout depends on: the graph, which nodes start and end it, the path to keep straight,
+   *  and every node's size. A picture is laid out again when — and only when — this changes. */
+  private layoutKey(): string {
+    const p = this.props;
+    const sizes = [...this.views.values()].map((v) => `${v.wrapper.offsetWidth}x${v.wrapper.offsetHeight}`).join(',');
+    const marks = this.userNodes.map((u) => (this.flag(u.data, p.initialField ?? 'IsInitial') ? 'i' : '')
+      + (this.flag(u.data, p.terminalField ?? 'IsTerminal') ? 't' : '')).join(',');
+    const labels = this.edgeRows.map((r) => this.edgeLabelOf(r)).join('\u0000');
+    return [this.shapeKey(), sizes, marks, (p.mainPath ?? []).join(','), p.layoutDirection ?? 'auto', p.nodeSizing ?? 'equal', labels].join('|');
+  }
+
+  private flag(row: Record<string, unknown>, field: string): boolean {
+    const v = field ? row[field] : undefined;
+    return v === true || v === 'true';
+  }
+
+  /** Every node's OWN size, and the largest width and height among them. A picture with `nodeSizing: equal` first lets
+   *  its nodes back to their own size (they may be held to an earlier layout's), so what is measured is what the app
+   *  drew and not what the canvas made of it. */
+  private nodeSizes(): { own: Map<string, { width: number; height: number }>; W: number; H: number } {
+    const own = new Map<string, { width: number; height: number }>();
+    const views = [...this.views.values()];
+    if (this.picture) for (const v of views) { v.wrapper.style.minWidth = ''; v.wrapper.style.minHeight = ''; }
+    let W = 0; let H = 0;
+    for (const v of views) {
+      const m = this.nodeLookup.get(v.id)?.measured;
+      const width = v.wrapper.offsetWidth || m?.width || 0; const height = v.wrapper.offsetHeight || m?.height || 0;
+      own.set(v.id, width && height ? { width, height } : { ...NOMINAL });
+      W = Math.max(W, own.get(v.id)!.width); H = Math.max(H, own.get(v.id)!.height);
+    }
+    return { own, W, H };
+  }
+
+  /** `nodeSizing: equal` — the boxes of one picture are one size, so a long name wraps inside its box instead of making
+   *  it the odd one out. ALONG the flow that is the whole size. A picture that flows DOWN is as wide as its widest
+   *  rank, and on a phone that width is what there is least of: there every node is the same height and keeps its own
+   *  width. */
+  private sizedFor(direction: Direction, sizes: { own: Map<string, { width: number; height: number }>; W: number; H: number }, id: string) {
+    const own = sizes.own.get(id)!;
+    if (!this.picture || (this.props.nodeSizing ?? 'equal') !== 'equal') return own;
+    return direction === 'down' || direction === 'up' ? { width: own.width, height: sizes.H } : { width: sizes.W, height: sizes.H };
+  }
+
+  /** An edge's label element — made before the layout, because the layout keeps room for it. */
+  private labelEl(id: string, text: string): HTMLDivElement {
+    let label = this.labelLayer.querySelector<HTMLDivElement>(`[data-id="${CSS.escape(id)}"]`);
+    if (!label) {
+      label = this.doc.createElement('div');
+      label.className = 'osy-flow__edge-label';
+      label.dataset.id = id;
+      this.labelLayer.appendChild(label);
+    }
+    if (label.textContent !== text) label.textContent = text;
+    return label;
+  }
+
   private loadLayout(): Promise<LayoutModule> {
     return this.layoutModule ??= import(/* @vite-ignore */ this.host.chunkUrl('Layout')) as Promise<LayoutModule>;
   }
 
-  /** Lay the graph out with dagre and move every node to its place — gliding there (the theme's motion) unless this is
-   *  the first paint or the person prefers less motion.
+  /** Lay the graph out and move every node to its place — gliding there (the theme's motion) unless this is the first
+   *  paint or the person prefers less motion.
    *  `auto`   — the canvas decided (initial / always): an editor's first layout is still reported, as `nodeMoved`s, so
    *             the app stores what the person sees; a picture reports nothing.
    *  `asked`  — the Tidy button or the `Layout` command: reported in an editor, one announcement for the whole move. */
   private async runLayout(why: 'auto' | 'asked') {
     if (this.layingOut || !this.xy) return;
     this.layingOut = true;
+    const picture = this.picture;
     try {
       const mod = await this.loadLayout();
       if (this.destroyed) return;
-      const rankdir = ({ right: 'LR', down: 'TB', left: 'RL', up: 'BT' } as Record<string, string>)[this.props.layoutDirection ?? 'right'] ?? 'LR';
-      const g = new mod.Graph({ multigraph: false });
-      g.setGraph({ rankdir, nodesep: 48, ranksep: 96, edgesep: 24, marginx: 0, marginy: 0 });
-      g.setDefaultEdgeLabel(() => ({}));
-      for (const n of this.nodeLookup.values()) g.setNode(n.id, { width: n.measured?.width ?? 0, height: n.measured?.height ?? 0 });
+      const p = this.props;
+      const sizes = this.nodeSizes();
+      const nodesFor = (direction: Direction): LayoutNode[] => this.userNodes.filter((u) => sizes.own.has(u.id)).map((u) => ({
+        id: u.id, ...this.sizedFor(direction, sizes, u.id),
+        initial: this.flag(u.data, p.initialField ?? 'IsInitial'), terminal: this.flag(u.data, p.terminalField ?? 'IsTerminal'),
+      }));
+      const edges: LayoutEdge[] = [];
       for (const r of this.edgeRows) {
-        const s = this.endOf(rid(r), 'source');
-        const t = this.endOf(rid(r), 'target');
-        if (this.nodeLookup.has(s) && this.nodeLookup.has(t) && s !== t) g.setEdge(s, t);
+        const id = rid(r);
+        const source = this.endOf(id, 'source'); const target = this.endOf(id, 'target');
+        if (!sizes.own.has(source) || !sizes.own.has(target)) continue;
+        const text = picture ? this.edgeLabelOf(r) : '';
+        const el = text ? this.labelEl(id, text) : null;
+        edges.push({ id, source, target, ...(el ? { labelWidth: el.offsetWidth || text.length * 6.5 + 14, labelHeight: el.offsetHeight || 20 } : {}) });
       }
-      mod.layout(g);
-      const snap = this.props.snap ?? 0;
+      // An editor's edges run from port to port and its nodes are then moved by hand: it is given more room than a
+      // picture, whose edges the layout routes itself and packs.
+      const options = { mainPath: p.mainPath ?? [], ...(picture ? {} : { rankSep: 96, nodeSep: 48 }) };
+      const started = performance.now();
+      // `auto` is decided by the two pictures themselves: whichever of them the box shows larger.
+      let direction = this.directionFor(null);
+      let nodes = nodesFor(direction);
+      let result = mod.layout(nodes, edges, { ...options, direction });
+      let both: Plan['sizes'] = null;
+      if (picture && (p.layoutDirection ?? 'auto') === 'auto') {
+        const downNodes = nodesFor('down');
+        const down = mod.layout(downNodes, edges, { ...options, direction: 'down' });
+        both = { along: { w: result.width, h: result.height }, down: { w: down.width, h: down.height } };
+        direction = this.directionFor(both);
+        if (direction === 'down') { result = down; nodes = downNodes; }
+      }
+      if (picture) for (const n of nodes) {
+        const w = this.views.get(n.id)!.wrapper;
+        const own = sizes.own.get(n.id)!;
+        w.style.minWidth = n.width > own.width ? `${n.width}px` : ''; w.style.minHeight = n.height > own.height ? `${n.height}px` : '';
+      }
+      const ms = performance.now() - started;
+      const asked = { ...options, direction };
+      const given = nodes;
+      this.plan = { layout: result, audit: mod.audit(result, nodes, edges), ms, print: mod.fingerprint(result), sizes: both,
+        again: () => mod.fingerprint(mod.layout(given, edges, asked)) };
+      const snap = picture ? 0 : this.props.snap ?? 0;
       const targets = new Map<string, { x: number; y: number }>();
-      for (const n of this.nodeLookup.values()) {
-        const p = g.node(n.id);
-        if (!p) continue;
-        let x = p.x - p.width / 2;
-        let y = p.y - p.height / 2;
-        x = snap > 0 ? Math.round(x / snap) * snap : Math.round(x);
-        y = snap > 0 ? Math.round(y / snap) * snap : Math.round(y);
-        targets.set(n.id, { x, y });
-      }
+      for (const n of result.nodes)
+        targets.set(n.id, { x: snap > 0 ? Math.round(n.x / snap) * snap : Math.round(n.x), y: snap > 0 ? Math.round(n.y / snap) * snap : Math.round(n.y) });
       const first = !this.fitted || this.laidOutKey === '';
+      // Motion says "the graph changed". A picture laid out again for any other reason — a node measured late, the box
+      // turned — is simply drawn where it now belongs.
+      const still = (first && why === 'auto') || (picture && why === 'auto' && this.shapeKey() === this.laidOutShape);
       this.laidOut = targets;
-      this.laidOutKey = this.shapeKey();
-      await this.glideTo(targets, first && why === 'auto' ? 0 : this.motionMs());
-      const report = !this.readOnly && this.props.autoLayout !== 'always';
+      this.laidOutKey = this.layoutKey();
+      this.laidOutShape = this.shapeKey();
+      this.gliding = true;
+      try { await this.glideTo(targets, still ? 0 : this.motionMs()); } finally { this.gliding = false; }
+      this.drawEdges();
+      const report = !this.readOnly && !picture;
       if (report && targets.size > 0) this.gesture('Lay out');
-      if (report) for (const [id, p] of targets) { const v = this.views.get(id); if (v) this.emitMoved(v, p.x, p.y); }
+      if (report) for (const [id, at] of targets) { const v = this.views.get(id); if (v) this.emitMoved(v, at.x, at.y); }
       this.fitted = true;
-      await this.fit(!first);
+      if (!first || !this.userMoved) await this.fit(!still);
+      this.describeAll();
       if (why === 'asked') this.announce(`Laid out ${targets.size} nodes.`);
     } finally {
       this.layingOut = false;
     }
+    // Something a layout depends on changed while this one was being worked out (a node measured late): once more.
+    if (picture && !this.destroyed && this.layoutKey() !== this.laidOutKey) void this.runLayout('auto');
   }
 
   /** Move nodes to new positions over `ms`, redrawing edges every frame so they stay attached. */
@@ -639,7 +881,7 @@ class FlowCanvas {
     };
     button('Zoom in', '<path d="M8 3v10M3 8h10"/>', () => this.zoomBy(1.2));
     button('Zoom out', '<path d="M3 8h10"/>', () => this.zoomBy(1 / 1.2));
-    button('Fit the picture', '<path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/>', () => void this.fit(true));
+    button('Fit the picture', '<path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/>', () => { this.userMoved = false; void this.fit(true); });
     const tidy = button('Tidy up (lay the graph out)', '<path d="M2 4h4M10 4h4M2 12h4M10 12h4M6 4l4 8M6 12l4-8"/>',
       () => void this.runLayout('asked'));
     tidy.classList.add('osy-flow__control--tidy');
@@ -815,6 +1057,10 @@ class FlowCanvas {
   private place(view: NodeView) {
     const n = this.nodeLookup.get(view.id);
     if (!n) return;
+    // The rings the canvas draws round a node (selected, current, visited) follow the corners of what the app drew.
+    const drawn = view.body.firstElementChild;
+    const radius = drawn ? this.doc.defaultView?.getComputedStyle?.(drawn).borderRadius : '';
+    if (radius && radius !== '0px' && view.wrapper.style.borderRadius !== radius) view.wrapper.style.borderRadius = radius;
     const { x, y } = n.internals.positionAbsolute;
     view.wrapper.style.transform = `translate(${x}px, ${y}px)`;
   }
@@ -973,46 +1219,58 @@ class FlowCanvas {
     const shape = p.edgeShape ?? 'bezier';
     const keep = new Set<Element>([this.connectionPath]);
     const keepLabels = new Set<Element>();
-    for (const row of this.edgeRows) {
+    // A picture's edges are the layout's ROUTES. Until there is a layout there is nothing true to draw (every node is
+    // still at one point), and while nodes glide to a new one the edges follow their ports.
+    const routes = this.picture && this.plan && !this.gliding ? new Map(this.plan.layout.edges.map((e) => [e.id, e])) : null;
+    const run = this.runEdges();
+    const inward: Record<Side, [number, number]> = { left: [1, 0], right: [-1, 0], top: [0, 1], bottom: [0, -1] };
+    for (const row of this.picture && !this.plan ? [] : this.edgeRows) {
       const id = rid(row);
-      const s = this.portOf(refId(row[sf]) ?? '', 'source', p.sourcePortField ? String(row[p.sourcePortField] ?? '') || null : null);
-      const t = this.portOf(refId(row[tf]) ?? '', 'target', p.targetPortField ? String(row[p.targetPortField] ?? '') || null : null);
-      if (!s || !t) continue;           // an endpoint not on the canvas (yet) — or not measured yet
-      const a = this.xy.getHandlePosition(s.node, s.handle, s.handle.position);
-      const b = this.xy.getHandlePosition(t.node, t.handle, t.handle.position);
-      const args = { sourceX: a.x, sourceY: a.y, sourcePosition: s.handle.position, targetX: b.x, targetY: b.y, targetPosition: t.handle.position };
-      const [d, lx, ly] = shape === 'straight' ? this.xy.getStraightPath(args)
-        : shape === 'smoothstep' ? this.xy.getSmoothStepPath(args) : this.xy.getBezierPath(args);
+      const route = routes?.get(id);
+      let d: string; let arrow: string; let lx: number; let ly: number;
+      if (route && route.path) {
+        d = route.path; arrow = route.arrow;
+        const mid = route.points[Math.floor(route.points.length / 2)];
+        lx = route.label?.x ?? mid.x; ly = route.label?.y ?? mid.y;
+      } else {
+        const s = this.portOf(refId(row[sf]) ?? '', 'source', p.sourcePortField ? String(row[p.sourcePortField] ?? '') || null : null);
+        const t = this.portOf(refId(row[tf]) ?? '', 'target', p.targetPortField ? String(row[p.targetPortField] ?? '') || null : null);
+        if (!s || !t) continue;           // an endpoint not on the canvas (yet) — or not measured yet
+        const a = this.xy.getHandlePosition(s.node, s.handle, s.handle.position);
+        const b = this.xy.getHandlePosition(t.node, t.handle, t.handle.position);
+        const args = { sourceX: a.x, sourceY: a.y, sourcePosition: s.handle.position, targetX: b.x, targetY: b.y, targetPosition: t.handle.position };
+        [d, lx, ly] = shape === 'straight' ? this.xy.getStraightPath(args)
+          : shape === 'smoothstep' ? this.xy.getSmoothStepPath(args) : this.xy.getBezierPath(args);
+        // The arrowhead stops at the port's rim, pointing the way the line arrives: into the side the port is on.
+        const dir = shape === 'straight' ? [b.x - a.x, b.y - a.y] : inward[t.handle.position] ?? [1, 0];
+        const len = Math.hypot(dir[0], dir[1]) || 1;
+        arrow = arrowAt({ x: b.x - (dir[0] / len) * 6, y: b.y - (dir[1] / len) * 6 }, { x: dir[0], y: dir[1] });
+      }
       let g = this.edgeLayer.querySelector<SVGGElement>(`g[data-id="${CSS.escape(id)}"]`);
       const isNew = !g;
       if (!g) g = this.buildEdge(id);
-      g.querySelectorAll('path').forEach((path) => path.setAttribute('d', d));
+      g.querySelectorAll('.osy-flow__edge-hit, .osy-flow__edge-path').forEach((path) => path.setAttribute('d', d));
+      g.querySelector('.osy-flow__edge-arrow')?.setAttribute('d', arrow);
       if (isNew && this.painted) this.drawIn(g);
       g.classList.toggle('selected', this.selected?.kind === 'edge' && this.selected.id === id);
-      // A run's PATH: an edge between two places it has been is travelled; the one that brought it to where it is now
-      // flows (and in a cycle more than one can — every way in from where it has been).
-      const sId = this.endOf(id, 'source'); const tId = this.endOf(id, 'target');
-      const been = (n: string) => this.isVisited(n) || this.isCurrent(n);
-      g.classList.toggle('travelled', been(sId) && been(tId));
-      g.classList.toggle('active', this.isVisited(sId) && this.isCurrent(tId));
+      // A run's PATH: the edges it took are heavier and in the accent; the one that brought it to where it is now
+      // flows. A RETURN — an edge that closes a cycle — is dashed, whoever took it.
+      g.classList.toggle('taken', run.taken.has(id));
+      g.classList.toggle('active', run.active.has(id));
+      g.classList.toggle('return', !!route?.reversed);
       keep.add(g);
       const text = this.edgeLabelOf(row);
       if (text) {
-        let label = this.labelLayer.querySelector<HTMLDivElement>(`[data-id="${CSS.escape(id)}"]`);
-        if (!label) {
-          label = this.doc.createElement('div');
-          label.className = 'osy-flow__edge-label';
-          label.dataset.id = id;
-          this.labelLayer.appendChild(label);
-        }
-        if (label.textContent !== text) label.textContent = text;
+        const label = this.labelEl(id, text);
         label.style.transform = `translate(${lx}px, ${ly}px) translate(-50%, -50%)`;
         label.classList.toggle('selected', this.selected?.kind === 'edge' && this.selected.id === id);
+        label.classList.toggle('taken', run.taken.has(id));
         keepLabels.add(label);
       }
     }
     for (const child of [...this.edgeLayer.children]) if (!keep.has(child)) child.remove();
-    for (const child of [...this.labelLayer.children]) if (!keepLabels.has(child)) child.remove();
+    // A label made for a layout that has not drawn yet is kept: the layout measured it.
+    for (const child of [...this.labelLayer.children]) if (!keepLabels.has(child) && !(this.picture && !routes)) child.remove();
     this.describeEdges();
     this.drawMinimap();
   }
@@ -1032,7 +1290,9 @@ class FlowCanvas {
     hit.setAttribute('class', 'osy-flow__edge-hit');
     const line = this.doc.createElementNS(SVG, 'path');
     line.setAttribute('class', 'osy-flow__edge-path');
-    g.append(hit, line);
+    const arrow = this.doc.createElementNS(SVG, 'path');
+    arrow.setAttribute('class', 'osy-flow__edge-arrow');
+    g.append(hit, line, arrow);
     g.addEventListener('mousedown', (e) => {
       e.stopPropagation();
       this.select({ kind: 'edge', id }, e.shiftKey || e.metaKey || e.ctrlKey);
@@ -1409,7 +1669,7 @@ class FlowCanvas {
         if (this.endOf(rid(r), 'source') === v.id) out++;
         if (this.endOf(rid(r), 'target') === v.id) into++;
       }
-      const d = (this.isCurrent(v.id) ? 'Current. ' : this.isVisited(v.id) ? 'Visited. ' : '')
+      const d = (this.isFailed(v.id) ? 'Failed. ' : this.isCurrent(v.id) ? 'Current. ' : this.isVisited(v.id) ? 'Visited. ' : '')
         + `${v.type ? v.type + '. ' : ''}${out} ${out === 1 ? 'edge' : 'edges'} out, ${into} in.`
         + (this.selNodes.has(v.id) ? ' Selected.' : '');
       if (v.desc.textContent !== d) v.desc.textContent = d;
@@ -1420,6 +1680,44 @@ class FlowCanvas {
       });
     }
     this.describeEdges();
+    this.describeOutline();
+  }
+
+  /** The picture in words: how many nodes and edges, which way it runs, then every node in the order it is drawn —
+   *  what it is (a start, an end), where a run stands with it, and where its edges lead. This is what someone who
+   *  cannot see the picture is given in its place. */
+  private describeOutline() {
+    const p = this.props;
+    const placed = this.plan ? new Map(this.plan.layout.nodes.map((n) => [n.id, n])) : null;
+    const views = [...this.views.values()];
+    if (placed) views.sort((a, b) => (placed.get(a.id)?.rank ?? 0) - (placed.get(b.id)?.rank ?? 0) || (placed.get(a.id)?.order ?? 0) - (placed.get(b.id)?.order ?? 0));
+    const returns = new Set(this.plan ? this.plan.layout.edges.filter((e) => e.reversed).map((e) => e.id) : []);
+    const run = this.runEdges();
+    const ways: Record<string, string> = { right: 'left to right', left: 'right to left', down: 'top to bottom', up: 'bottom to top' };
+    const count = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+    const lines = views.map((v) => {
+      const marks = [
+        this.flag(v.row, p.initialField ?? 'IsInitial') ? 'start' : '', this.flag(v.row, p.terminalField ?? 'IsTerminal') ? 'end' : '',
+        this.isFailed(v.id) ? 'failed' : this.isCurrent(v.id) ? 'current' : this.isVisited(v.id) ? 'visited' : '',
+      ].filter(Boolean).join(', ');
+      const out = this.edgeRows.filter((r) => this.endOf(rid(r), 'source') === v.id).map((r) => {
+        const t = this.views.get(this.endOf(rid(r), 'target'));
+        const label = this.edgeLabelOf(r);
+        return (t?.id === v.id ? 'to itself' : `${returns.has(rid(r)) ? 'back to' : 'to'} ${t ? this.labelOf(t) : 'a node not shown'}`)
+          + (label ? ` on ${label}` : '') + (run.taken.has(rid(r)) ? ' (taken)' : '');
+      });
+      return `${this.labelOf(v)}${marks ? ` (${marks})` : ''}${out.length ? ': ' + out.join('; ') : ''}.`;
+    });
+    const head = `${count(views.length, 'node')} and ${count(this.edgeRows.length, 'edge')}`
+      + (this.plan ? `, drawn ${ways[this.plan.layout.direction]}` : '') + '.';
+    const text = [head, ...lines.map((l, i) => `${i + 1}. ${l}`)].join(' ');
+    if (text === this.outlineText) return;
+    this.outlineText = text;
+    const summary = this.doc.createElement('p');
+    summary.textContent = head;
+    const list = this.doc.createElement('ol');
+    for (const l of lines) { const li = this.doc.createElement('li'); li.textContent = l; list.appendChild(li); }
+    this.outline.replaceChildren(summary, list);
   }
 
   private describeEdges() {

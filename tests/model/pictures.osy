@@ -1,0 +1,156 @@
+using Osysharp.Diagrams;
+
+// PICTURES — the graphs the layout is held to. Each is a list of plain values (no rows, no workflow): a spot with a
+// name, and a way from one spot to another. `Graphs.Of(name)` hands one out; `/pictures/{name}` draws it; the tests
+// read what the canvas counted about its own layout (`Assert.Probe`).
+
+public class Spot {
+  public string Id;
+  public string Label;
+  public bool IsInitial;
+  public bool IsTerminal;
+}
+
+public class Way {
+  public string Id;
+  public string From;
+  public string To;
+  public string Trigger;
+}
+
+public class Graph {
+  public List<Spot> Spots = [];
+  public List<Way> Ways = [];
+
+  public Graph Start(string id, string label) { Spots.Add(new Spot { Id = id, Label = label, IsInitial = true, IsTerminal = false }); return this; }
+  public Graph Step(string id, string label)  { Spots.Add(new Spot { Id = id, Label = label, IsInitial = false, IsTerminal = false }); return this; }
+  public Graph End(string id, string label)   { Spots.Add(new Spot { Id = id, Label = label, IsInitial = false, IsTerminal = true }); return this; }
+  public Graph Go(string from, string to, string trigger = "") {
+    Ways.Add(new Way { Id = "w" + Ways.Count, From = from, To = to, Trigger = trigger });
+    return this;
+  }
+}
+
+/// The fixture graphs, by name.
+Graph GraphOf(string name) {
+  var g = new Graph();
+  if (name == "supplier") {
+    // The supplier qualification of the Agents kit: a straight way to "Approved", a step taken by hand when an agent
+    // could not, three ways to stop — and "Withdrawn" reachable from every step.
+    g.Start("Screening", "Checking documents").Step("Assessing", "Assessing risk").Step("ByHand", "Assessed by hand")
+     .Step("Deciding", "Settling terms")
+     .End("Approved", "Approved").End("Incomplete", "Documents missing").End("Declined", "Declined").End("Withdrawn", "Withdrawn")
+     .Go("Screening", "Incomplete").Go("Screening", "Assessing").Go("Assessing", "ByHand").Go("Assessing", "Deciding")
+     .Go("ByHand", "Deciding").Go("Deciding", "Approved").Go("Deciding", "Declined")
+     .Go("Screening", "Withdrawn").Go("Assessing", "Withdrawn").Go("ByHand", "Withdrawn").Go("Deciding", "Withdrawn");
+  } else if (name == "supplier-more") {
+    // The same, with ONE transition more — a refusal straight from the hand assessment.
+    g = GraphOf("supplier");
+    g.Go("ByHand", "Declined");
+  } else if (name == "linear") {
+    g.Start("A", "Draft").Step("B", "Review").Step("C", "Approve").Step("D", "Publish").End("E", "Archived")
+     .Go("A", "B").Go("B", "C").Go("C", "D").Go("D", "E");
+  } else if (name == "diamond") {
+    g.Start("A", "Received").Step("B", "Fast lane").Step("C", "Slow lane").End("D", "Shipped")
+     .Go("A", "B").Go("A", "C").Go("B", "D").Go("C", "D");
+  } else if (name == "retry") {
+    // A return (Retry), a loop on one node (Throttled), and a label on every edge.
+    g.Start("A", "Queued").Step("B", "Sending").Step("C", "Waiting to retry").End("D", "Sent").End("E", "Gave up")
+     .Go("A", "B", "Start").Go("B", "D", "Delivered").Go("B", "C", "Failed").Go("C", "B", "Retry")
+     .Go("C", "E", "Too many tries").Go("B", "B", "Throttled");
+  } else if (name == "twostart") {
+    g.Start("A", "Web order").Start("B", "Phone order").Step("C", "Check stock").Step("D", "Pack").Step("E", "Back-ordered")
+     .End("F", "Shipped").End("G", "Cancelled")
+     .Go("A", "C").Go("B", "C").Go("C", "D").Go("C", "E").Go("E", "D").Go("D", "F").Go("E", "G").Go("B", "G");
+  } else if (name == "selfloop") {
+    g.Start("A", "Idle").Step("B", "Polling").End("C", "Stopped")
+     .Go("A", "B", "Start").Go("B", "B", "Tick").Go("B", "C", "Stop");
+  } else if (name == "big") {
+    // Twenty spots and thirty-five ways: a spine of eight, four branches that rejoin it, four returns, three ends.
+    g.Start("S0", "Order received");
+    string[] names = ["Check the address", "Check the stock", "Reserve the items", "Take the payment", "Pick", "Pack", "Hand to the carrier",
+      "Ask for a new address", "Address confirmed", "Order from the supplier", "Supplier delivered", "Split the order", "Second parcel",
+      "Payment declined", "Ask for another card", "Hold for review"];
+    for (var i = 0; i < 16; i++) { g.Step("S" + (i + 1), names[i]); }
+    g.End("S17", "Delivered").End("S18", "Cancelled").End("S19", "Refunded");
+    int[] from = [0, 1, 2, 3, 4, 5, 6, 7, 1, 8, 9, 2, 10, 11, 3, 12, 13, 5, 14, 15, 8, 10, 12, 14, 9, 11, 13, 15, 16, 4, 6, 7, 1, 0, 12];
+    int[] to   = [1, 2, 3, 4, 5, 6, 7, 17, 8, 9, 4, 10, 11, 6, 12, 13, 7, 14, 15, 17, 18, 18, 19, 19, 1, 2, 3, 5, 7, 16, 18, 19, 16, 8, 18];
+    for (var i = 0; i < 35; i++) { g.Go("S" + from[i], "S" + to[i]); }
+  }
+  return g;
+}
+
+FlowNodeType[] SpotTypes() {
+  return [ new FlowNodeType { Name = "Spot", Ports = [
+    new FlowPort { Id = "in", Kind = "target", Side = "left" },
+    new FlowPort { Id = "out", Kind = "source", Side = "right" } ] } ];
+}
+
+/// What one spot looks like: its name, wrapped inside a box that is never wider than a short line; an end is a pill.
+[Composable]
+component SpotBox(Spot s) {
+  render {
+    Stack(justify: Justify.Center, px: 3, py: 2, minW: "104px", maxW: "148px", minH: "40px", bg: Colors.Surface, borderW: 1,
+          border: Colors.Border, rounded: s.IsTerminal ? Radius.Pill : Radius.Md) {
+      Text(s.Label, fontSize: FontSize.Label, fontWeight: FontWeight.Semibold, lineHeight: "1.3", textAlign: TextAlign.Center);
+    }
+  }
+}
+
+/// One fixture, as a picture. `?at=` and `?failed=` put a run on it.
+[Route("/pictures/{name}")] [AllowAnonymous]
+component PicturePage(string name) {
+  render {
+    var g = GraphOf(name);
+    Stack(gap: 3, p: 4, bg: Colors.Bg, minH: "100vh") {
+      Text(name, fontSize: FontSize.Label, color: Colors.TextMuted);
+      Box(h: name == "big" ? "560px" : "380px", w: "100%", bg: Colors.Surface, borderW: 1, border: Colors.Border, rounded: Radius.Lg, overflow: Overflow.Hidden, label: "The picture") {
+        FlowCanvas(
+          nodes: g.Spots, edges: g.Ways, nodeTypes: SpotTypes(),
+          sourceField: "From", targetField: "To", labelField: "Label", edgeLabelField: "Trigger",
+          readOnly: true, autoLayout: always, background: none
+        ) { s => SpotBox(s); }
+      }
+    }
+  }
+}
+
+/// The same pictures inside a right-to-left box: the flow runs the way the page reads.
+[Route("/rtl/{name}")] [AllowAnonymous]
+component RightToLeftPage(string name) {
+  render {
+    var g = GraphOf(name);
+    Stack(gap: 3, p: 4, bg: Colors.Bg, minH: "100vh", flowDirection: FlowDirection.RightToLeft) {
+      Text(name, fontSize: FontSize.Label, color: Colors.TextMuted);
+      Box(h: "380px", w: "100%", bg: Colors.Surface, borderW: 1, border: Colors.Border, rounded: Radius.Lg, overflow: Overflow.Hidden, label: "The picture") {
+        FlowCanvas(
+          nodes: g.Spots, edges: g.Ways, nodeTypes: SpotTypes(),
+          sourceField: "From", targetField: "To", labelField: "Label", edgeLabelField: "Trigger",
+          readOnly: true, autoLayout: always, background: none
+        ) { s => SpotBox(s); }
+      }
+    }
+  }
+}
+
+/// The supplier qualification with a run on it: where it went, where it is, and — on `/run/failed` — where it failed.
+[Route("/run/{how}")] [AllowAnonymous]
+component RunPage(string how) {
+  render {
+    var g = GraphOf("supplier");
+    Stack(gap: 3, p: 4, bg: Colors.Bg, minH: "100vh") {
+      Text("A run, " + how, fontSize: FontSize.Label, color: Colors.TextMuted);
+      Box(h: "380px", w: "100%", bg: Colors.Surface, borderW: 1, border: Colors.Border, rounded: Radius.Lg, overflow: Overflow.Hidden, label: "The picture") {
+        FlowCanvas(
+          nodes: g.Spots, edges: g.Ways, nodeTypes: SpotTypes(),
+          sourceField: "From", targetField: "To", labelField: "Label",
+          readOnly: true, autoLayout: always, background: none,
+          visited: how == "failed" ? ["Screening"] : ["Screening", "Assessing", "ByHand"],
+          highlighted: how == "failed" ? [] : ["Deciding"],
+          failed: how == "failed" ? ["Assessing"] : [],
+          path: how == "failed" ? ["Screening", "Assessing"] : []
+        ) { s => SpotBox(s); }
+      }
+    }
+  }
+}

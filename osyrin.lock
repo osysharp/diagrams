@@ -6,21 +6,21 @@
   "controls": [
     {
       "name": "FlowCanvas",
-      "hash": "7711c950ed05e6fc8ed36376e9944cd349bdebd8348080d049e6649dd2e2047c",
+      "hash": "223d6bc1ecdc251d26ecfad6397ffa76f3ccf30ffe4ed02d5042d0b5e7dce864",
       "file": "flow.js",
       "contentType": "text/javascript",
       "source": "flow.ts",
       "chunks": [
         {
-          "name": "XY",
-          "hash": "6563f4eca35af4743efe18b204e60cc1699f3408832e72b7c90ae68280624863",
-          "file": "xyflow-system.js",
+          "name": "Layout",
+          "hash": "a12b3f24c8b8474819a15b454bd222f3f980db5e9bb6a56d513989084e0cc375",
+          "file": "layered-layout.js",
           "contentType": "text/javascript"
         },
         {
-          "name": "Layout",
-          "hash": "b85c63f2653a13c3aa9857beb608d35f9f286d7230072323b302d1824af1b060",
-          "file": "dagre-layout.js",
+          "name": "XY",
+          "hash": "6563f4eca35af4743efe18b204e60cc1699f3408832e72b7c90ae68280624863",
+          "file": "xyflow-system.js",
           "contentType": "text/javascript"
         }
       ]

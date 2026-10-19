@@ -58,6 +58,9 @@
   position: absolute;
   left: 0;
   top: 0;
+  /* A node is as wide as what the app drew in it WANTS to be. Left to itself an absolutely placed box inside the
+     zero-width viewport shrinks to its narrowest, breaking every name at every space. */
+  width: max-content;
   cursor: grab;
   outline: none;
   border-radius: 10px;
@@ -145,7 +148,7 @@
 /* Zoom in / out / fit. */
 .osy-flow__controls {
   position: absolute;
-  left: 12px;
+  inset-inline-start: 12px;
   bottom: 12px;
   z-index: 4;
   display: flex;
@@ -156,6 +159,10 @@
   border: 1px solid var(--colors-border, GrayText);
   box-shadow: var(--shadow-raised, none);
 }
+/* In a picture the toolbar takes whichever corner the picture leaves empty (the shim says which). */
+.osy-flow[data-controls="bottom-end"] .osy-flow__controls { inset-inline-start: auto; inset-inline-end: 12px; }
+.osy-flow[data-controls="top-end"] .osy-flow__controls { inset-inline-start: auto; inset-inline-end: 12px; bottom: auto; top: 12px; }
+.osy-flow[data-controls="top-start"] .osy-flow__controls { bottom: auto; top: 12px; }
 .osy-flow__control {
   display: grid;
   place-items: center;
@@ -206,16 +213,60 @@
 }
 .osy-flow__control[hidden] { display: none; }
 
-/* A run's place in a picture: the CURRENT node breathes; nodes it passed through are done; its path is drawn. */
+/* Every edge ends in an arrowhead, in the colour of its line. */
+.osy-flow__edge-arrow {
+  fill: color-mix(in srgb, currentColor 55%, transparent);
+  stroke: none;
+}
+.osy-flow__edge.selected .osy-flow__edge-arrow,
+.osy-flow__edge:focus-visible .osy-flow__edge-arrow { fill: var(--colors-primary, Highlight); }
+.osy-flow__edge-path { stroke-linejoin: round; stroke-linecap: round; }
+/* A RETURN — an edge that closes a cycle, drawn against the flow: dashed, so it reads as a way back without colour. */
+.osy-flow__edge.return .osy-flow__edge-path { stroke-dasharray: 5 4; }
+
+/* A PICTURE (`autoLayout: always`): the canvas placed every node and routed every edge, so the ports are not where
+   edges attach and are not shown; with `nodeSizing: equal` every node is held to the size of the largest, and what
+   the app drew fills it. */
+.osy-flow.picture.readonly .osy-flow__handle { opacity: 0; pointer-events: none; }
+.osy-flow.picture.equal .osy-flow__body { display: grid; min-width: inherit; min-height: inherit; }
+.osy-flow.picture .osy-flow__edge-label { box-shadow: 0 0 0 3px var(--colors-surface, Canvas); }
+
+/* A RUN on a picture. What it took is strong and what it has not reached is quiet — and each state has a mark that
+   does not depend on colour: taken edges are HEAVIER, the current node has a thick ring, a visited one a tick, a
+   failed one a broken outline and a bang. */
 .osy-flow__node.current {
   box-shadow: 0 0 0 3px var(--colors-primary, Highlight), 0 0 0 9px color-mix(in srgb, var(--colors-primary, Highlight) 18%, transparent);
   animation: osy-flow-breathe 2.4s ease-in-out infinite;
 }
-.osy-flow__node.visited { opacity: 0.72; }
-.osy-flow__edge.travelled .osy-flow__edge-path { stroke: var(--colors-primary, Highlight); stroke-width: 2; }
+.osy-flow__node.visited { box-shadow: 0 0 0 1.5px var(--colors-primary, Highlight); }
+.osy-flow__node.failed {
+  outline: 2.5px dashed var(--colors-danger, var(--colors-borderdanger, currentColor));
+  outline-offset: 1px;
+}
+.osy-flow__node.visited::after,
+.osy-flow__node.failed::after {
+  position: absolute;
+  top: -7px;
+  inset-inline-end: -7px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--colors-surface, Canvas);
+}
+.osy-flow__node.visited::after { content: "\2713"; background: var(--colors-primary, Highlight); }
+.osy-flow__node.failed::after { content: "!"; background: var(--colors-danger, var(--colors-borderdanger, currentColor)); }
+.osy-flow.has-run .osy-flow__node:not(.current):not(.visited):not(.failed) > .osy-flow__body { opacity: 0.72; }
+.osy-flow.has-run .osy-flow__edge:not(.taken) .osy-flow__edge-path { stroke: color-mix(in srgb, currentColor 28%, transparent); stroke-width: 1.25; }
+.osy-flow.has-run .osy-flow__edge:not(.taken) .osy-flow__edge-arrow { fill: color-mix(in srgb, currentColor 36%, transparent); }
+.osy-flow__edge.taken .osy-flow__edge-path { stroke: var(--colors-primary, Highlight); stroke-width: 2.75; }
+.osy-flow__edge.taken .osy-flow__edge-arrow { fill: var(--colors-primary, Highlight); }
+.osy-flow__edge-label.taken { border-color: var(--colors-primary, Highlight); color: var(--colors-primary, Highlight); font-weight: 600; }
 .osy-flow__edge.active .osy-flow__edge-path {
-  stroke: var(--colors-primary, Highlight);
-  stroke-width: 2.5;
   stroke-dasharray: 8 6;
   animation: osy-flow-flow 0.9s linear infinite;
 }
@@ -225,8 +276,9 @@
 }
 @keyframes osy-flow-flow { to { stroke-dashoffset: -14; } }
 @media (prefers-reduced-motion: reduce) {
-  .osy-flow__node.current, .osy-flow__edge.active .osy-flow__edge-path { animation: none; }
+  .osy-flow__node.current { animation: none; }
+  /* Without motion the edge that is being travelled is simply a taken edge: solid, so it is not mistaken for a return. */
+  .osy-flow__edge.active .osy-flow__edge-path { animation: none; stroke-dasharray: none; }
 }
-
 /* A node on its way out: it no longer takes a pointer, and it never covers the one taking its place. */
 .osy-flow__node.leaving { pointer-events: none; z-index: 0; }

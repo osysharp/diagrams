@@ -1,4 +1,4 @@
-// Build the Flow kit's one CHUNK, `XY` — React Flow's framework-independent core (`@xyflow/system`, MIT) and the d3
+// Build the Flow kit's CHUNKS. `XY` — React Flow's framework-independent core (`@xyflow/system`, MIT) and the d3
 // modules it drives (ISC; d3-ease BSD-3-Clause), bundled to ONE self-contained ES module.
 //
 // Why a chunk rather than inlined into the shim: it is ~75 KB minified of third-party code that changes on ITS
@@ -39,14 +39,12 @@ execFileSync(join(kit, 'node_modules', '.bin', 'esbuild'), [
 
 console.log(`XY  ${(statSync(out).size / 1024).toFixed(1)} KB  (xyflow-system.js, @xyflow/system ${version} + d3)`);
 
-// ── chunk `Layout` — `@dagrejs/dagre` (MIT) with its graphlib, for auto-layout. A SEPARATE chunk because a canvas whose
-// nodes already have positions never asks for it: a page that only draws what the app stored downloads none of it.
-const layoutEntry = join(dirname(entry), 'layout.js');
-writeFileSync(layoutEntry, `export { Graph, layout } from ${JSON.stringify(join(kit, 'node_modules', '@dagrejs', 'dagre', 'dist', 'dagre.esm.js'))};\n`);
-const dagreVersion = JSON.parse(readFileSync(join(kit, 'node_modules', '@dagrejs', 'dagre', 'package.json'), 'utf8')).version;
-const layoutBanner = `/*! @dagrejs/dagre ${dagreVersion} + @dagrejs/graphlib (MIT, (c) 2012-2014 Chris Pettitt). Full text: kits/diagrams/LICENSE. */`;
-const layoutOut = join(kit, 'dagre-layout.js');
+// ── chunk `Layout` — the kit's OWN layered layout and edge router (`layout.ts`); no third-party code in it. A SEPARATE
+// chunk because a canvas whose nodes already have positions never asks for it: a page that only draws what the app
+// stored downloads none of it.
+const layoutOut = join(kit, 'layered-layout.js');
 execFileSync(join(kit, 'node_modules', '.bin', 'esbuild'), [
-  layoutEntry, '--bundle', '--format=esm', '--minify', '--legal-comments=eof', `--outfile=${layoutOut}`, `--banner:js=${layoutBanner}`,
+  join(kit, 'layout.ts'), '--bundle', '--format=esm', '--minify', '--target=es2022', `--outfile=${layoutOut}`,
+  '--banner:js=/*! Osysharp.Diagrams layered layout (MIT). Source: kits/diagrams/layout.ts. */',
 ], { stdio: 'inherit' });
-console.log(`Layout  ${(statSync(layoutOut).size / 1024).toFixed(1)} KB  (dagre-layout.js, @dagrejs/dagre ${dagreVersion})`);
+console.log(`Layout  ${(statSync(layoutOut).size / 1024).toFixed(1)} KB  (layered-layout.js, the kit's own)`);

@@ -149,14 +149,26 @@ export interface FlowCanvasProps<TNode extends EntityRow = EntityRow, TEdge exte
   minimap?: boolean;
   /** `string autoLayout` — one of: initial, always, none — OPTIONAL: a default is not sent, so apply it in the shim */
   autoLayout?: string;
-  /** `string layoutDirection` — one of: right, down, left, up — OPTIONAL: a default is not sent, so apply it in the shim */
+  /** `string layoutDirection` — one of: auto, right, down, left, up — OPTIONAL: a default is not sent, so apply it in the shim */
   layoutDirection?: string;
+  /** `string initialField` — OPTIONAL: a default is not sent, so apply it in the shim */
+  initialField?: string;
+  /** `string terminalField` — OPTIONAL: a default is not sent, so apply it in the shim */
+  terminalField?: string;
+  /** `string[] mainPath` — OPTIONAL: a default is not sent, so apply it in the shim */
+  mainPath?: string[];
+  /** `string nodeSizing` — one of: equal, natural — OPTIONAL: a default is not sent, so apply it in the shim */
+  nodeSizing?: string;
   /** `FlowTool[] tools` — OPTIONAL: a default is not sent, so apply it in the shim */
   tools?: FlowTool[];
   /** `string[] highlighted` — OPTIONAL: a default is not sent, so apply it in the shim */
   highlighted?: string[];
   /** `string[] visited` — OPTIONAL: a default is not sent, so apply it in the shim */
   visited?: string[];
+  /** `string[] path` — OPTIONAL: a default is not sent, so apply it in the shim */
+  path?: string[];
+  /** `string[] failed` — OPTIONAL: a default is not sent, so apply it in the shim */
+  failed?: string[];
 }
 
 /** What the platform offers a mounted `FlowCanvas`. */
@@ -221,6 +233,40 @@ export interface FlowCanvasHandle<TNode extends EntityRow = EntityRow, TEdge ext
     focused?: string | null;
     /** How many nodes and edges are selected. */
     selection: number;
+    /** What is true of the LAST LAYOUT, counted (all 0, and `direction` empty, before the canvas has laid itself out). Which way it flows: `right`, `down`, `left` or `up`. */
+    direction: string;
+    /** How many ranks it has. */
+    ranks: number;
+    /** Places where two routed edges cross. */
+    crossings: number;
+    /** Places where two routed edges lie on one another. */
+    overlaps: number;
+    /** Routed edges that pass through a node. */
+    throughNodes: number;
+    /** Pairs of nodes that overlap. */
+    nodeOverlaps: number;
+    /** Edge labels that lie on a node. */
+    labelsOnNodes: number;
+    /** Edges that are not returns and yet do not lead to a later rank. */
+    backward: number;
+    /** Returns — edges drawn against the flow because they close a cycle. */
+    returns: number;
+    /** End nodes that are not in the last rank. */
+    endsNotLast: number;
+    /** Whether the main path lies on one straight line. */
+    mainStraight: boolean;
+    /** The main path, as node keys joined by " > ". */
+    mainPath: string;
+    /** A fingerprint of every position and route: the same graph in the same box answers the same one. */
+    layout: string;
+    /** Laid out once more just now, the graph came out exactly the same. */
+    stable: boolean;
+    /** How long the last layout took to work out, in milliseconds. */
+    layoutMs: number;
+    /** How many edges are drawn as taken by the run. */
+    edgesTaken: number;
+    /** The picture in words — what a screen reader is given in place of it. */
+    outline: string;
   };
 }
 

@@ -57,8 +57,8 @@ FlowNodeType[] CardTypes() {
 
 [Route("/board")] [AllowAnonymous]
 component Board() {
-  live var cards = Card.OrderBy(c => c.Title);
-  live var links = Link.ToList();
+  live var cards = Card.OrderBy(c => c.Title).Take(500);
+  live var links = Link.Take(1000).ToList();
 
   render {
     Box(h: "400px") {
