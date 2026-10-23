@@ -38,35 +38,39 @@ public class FlowNodeType {
 
 /// A node-and-edge modelling canvas: pan, zoom, drag nodes, draw edges between ports, select and delete — by mouse
 /// and by keyboard. Nodes and edges are the app's own rows; each node renders through the template written for its type.
-/// e.g. `FlowCanvas(nodes: steps, edges: links, nodeTypes: types, nodeMoved: Move, connected: Link) { slot Step { s => Text(s.Title); } }`
+/// e.g. `FlowCanvas(nodes: steps, edges: links, nodeTypes: types, typeField: s => s.Kind, nodeMoved: Move, connected: Link) { slot Step { s => Text(s.Title); } }`
 control FlowCanvas<TNode, TEdge> {
   contractVersion "1.1"
   participation headless
   // A canvas FILLS the box the app put it in: its content is all positioned, so it has no height of its own to grow to.
   sizing fill
   props {
-    /// The nodes — the app's rows. Each is positioned by `xField`/`yField` and rendered by the template of its type.
+    /// The nodes — the app's rows. Each is positioned by `xField`/`yField` (`n => n.X`) and rendered by the template of
+    /// its type.
     TNode[] nodes;
-    /// The edges — the app's rows. Each joins the node its `sourceField` names to the one its `targetField` names.
+    /// The edges — the app's rows. Each joins the node its `sourceField` selects to the one its `targetField` selects.
     TEdge[] edges;
     /// The node types, their ports, and the names the per-type templates are written against.
     FlowNodeType[] nodeTypes;
-    /// Which field of a node row holds its type's `Name`. Omitted: every node is the FIRST type.
-    string? typeField;
-    /// Which fields of a node row hold its position, in canvas units.
-    string xField = "X";
-    string yField = "Y";
-    /// Which fields of an edge row reference its two nodes.
-    string sourceField = "Source";
-    string targetField = "Target";
-    /// Which fields of an edge row name the ports it uses. Omitted: the first source / target port of each node.
-    string? sourcePortField;
-    string? targetPortField;
-    /// Which field of a node row is its NAME — what a screen reader says for it, and what an edge "from X to Y" and an
-    /// announcement use. Omitted: the words the node's template rendered (buttons included), so name it when you can.
-    string? labelField;
-    /// Which field of an edge row is its LABEL — drawn on the edge and read as part of its name. Omitted: no label.
-    string? edgeLabelField;
+    // ⭐ EVERY `…Field` BELOW IS A MEMBER SELECTOR (`typeField: s => s.Kind`), checked against the app's row type when
+    //    the call compiles — a misspelt member is a compile error naming it, not a node drawn at (0, 0). The defaults
+    //    are selectors too, applied when the row has that member.
+    /// Which member of a node row holds its type's `Name`. Omitted: every node is the FIRST type.
+    Func<TNode, string>? typeField;
+    /// Which members of a node row hold its position, in canvas units.
+    Func<TNode, double> xField = n => n.X;
+    Func<TNode, double> yField = n => n.Y;
+    /// Which members of an edge row reference its two nodes — the node row itself, or its key.
+    Func<TEdge, object> sourceField = e => e.Source;
+    Func<TEdge, object> targetField = e => e.Target;
+    /// Which members of an edge row name the ports it uses. Omitted: the first source / target port of each node.
+    Func<TEdge, string>? sourcePortField;
+    Func<TEdge, string>? targetPortField;
+    /// Which member of a node row is its NAME — what a screen reader says for it, and what an edge "from X to Y" and
+    /// an announcement use. Omitted: the words the node's template rendered (buttons included), so name it when you can.
+    Func<TNode, string>? labelField;
+    /// Which member of an edge row is its LABEL — drawn on the edge and read as part of its name. Omitted: no label.
+    Func<TEdge, string>? edgeLabelField;
     /// A picture, not an editor: nothing moves, nothing connects, nothing is deleted. Pan and zoom still work.
     bool readOnly = false;
     [Values(bezier, smoothstep, straight)] string edgeShape = "bezier";
@@ -92,10 +96,10 @@ control FlowCanvas<TNode, TEdge> {
     /// Which way a laid-out graph flows. `auto` is left to right in a wide box, top to bottom in a narrow one (a
     /// phone), and right to left where the page reads that way.
     [Values(auto, right, down, left, up)] string layoutDirection = "auto";
-    /// Which field of a node row says it is a START, and which that it is an END. A layout begins at the starts and
-    /// puts every end in the last rank. Rows without these fields are neither — a workflow's states have both.
-    string initialField = "IsInitial";
-    string terminalField = "IsTerminal";
+    /// Which member of a node row says it is a START, and which that it is an END. A layout begins at the starts and
+    /// puts every end in the last rank. Rows without these members are neither — a workflow's states have both.
+    Func<TNode, bool> initialField = n => n.IsInitial;
+    Func<TNode, bool> terminalField = n => n.IsTerminal;
     /// The path to keep on one straight row, as node keys in order (the way things usually go). Empty: from the first
     /// start to the first end the nodes list, by the longest way there.
     string[] mainPath = [];

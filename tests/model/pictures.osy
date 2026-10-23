@@ -107,7 +107,7 @@ component PicturePage(string name) {
       Box(h: name == "big" ? "560px" : "380px", w: "100%", bg: Colors.Surface, borderW: 1, border: Colors.Border, rounded: Radius.Lg, overflow: Overflow.Hidden, label: "The picture") {
         FlowCanvas(
           nodes: g.Spots, edges: g.Ways, nodeTypes: SpotTypes(),
-          sourceField: "From", targetField: "To", labelField: "Label", edgeLabelField: "Trigger",
+          sourceField: e => e.From, targetField: e => e.To, labelField: n => n.Label, edgeLabelField: e => e.Trigger,
           readOnly: true, autoLayout: always, background: none
         ) { s => SpotBox(s); }
       }
@@ -125,7 +125,7 @@ component RightToLeftPage(string name) {
       Box(h: "380px", w: "100%", bg: Colors.Surface, borderW: 1, border: Colors.Border, rounded: Radius.Lg, overflow: Overflow.Hidden, label: "The picture") {
         FlowCanvas(
           nodes: g.Spots, edges: g.Ways, nodeTypes: SpotTypes(),
-          sourceField: "From", targetField: "To", labelField: "Label", edgeLabelField: "Trigger",
+          sourceField: e => e.From, targetField: e => e.To, labelField: n => n.Label, edgeLabelField: e => e.Trigger,
           readOnly: true, autoLayout: always, background: none
         ) { s => SpotBox(s); }
       }
@@ -143,7 +143,7 @@ component RunPage(string how) {
       Box(h: "380px", w: "100%", bg: Colors.Surface, borderW: 1, border: Colors.Border, rounded: Radius.Lg, overflow: Overflow.Hidden, label: "The picture") {
         FlowCanvas(
           nodes: g.Spots, edges: g.Ways, nodeTypes: SpotTypes(),
-          sourceField: "From", targetField: "To", labelField: "Label",
+          sourceField: e => e.From, targetField: e => e.To, labelField: n => n.Label,
           readOnly: true, autoLayout: always, background: none,
           visited: how == "failed" ? ["Screening"] : ["Screening", "Assessing", "ByHand"],
           highlighted: how == "failed" ? [] : ["Deciding"],

@@ -66,7 +66,7 @@ FlowCanvas(
   nodeTypes: [ new FlowNodeType { Name = "State", Ports = [
     new FlowPort { Id = "in", Kind = "target", Side = "left" },
     new FlowPort { Id = "out", Kind = "source", Side = "right" } ] } ],
-  sourceField: "From", targetField: "To", labelField: "Label", edgeLabelField: "Trigger",
+  sourceField: e => e.From, targetField: e => e.To, labelField: n => n.Label, edgeLabelField: e => e.Trigger,
   readOnly: true,
   autoLayout: always,                          // a picture: the canvas places every node and routes every edge
   visited: times.Select(t => t.State).ToList(),// where the run has been, in order
@@ -105,7 +105,7 @@ FlowCanvas(
   nodeTypes: [ new FlowNodeType { Name = "Task", Ports = [
     new FlowPort { Id = "in", Kind = "target", Side = "left" },
     new FlowPort { Id = "out", Kind = "source", Side = "right" } ] } ],
-  labelField: "Title",          // what a screen reader calls each node
+  labelField: n => n.Title,          // what a screen reader calls each node
   snap: 20, minimap: true,
   nodeMoved: Move, connected: Link, edgeRemoved: Unlink, nodeRemoved: Remove,
   selectionChanged: Selected

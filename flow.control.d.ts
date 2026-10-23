@@ -25,6 +25,9 @@ export interface TokenScope {
  *  props and reads/writes it here. Deliberately generic: it knows nothing about any control family. */
 export interface ControlDataScope {
   request(path: string, init?: { method?: string; body?: unknown }): Promise<ControlDataResponse>;
+  /** "Your data moved": the page's Undo or Redo rolled back (or re-applied) what you staged in its unit
+   *  of work on the server. Re-read what you show. Answers the unsubscribe; absent on a host with no page. */
+  onChanged?(listener: () => void): () => void;
 }
 
 export interface ControlDataResponse {
@@ -117,23 +120,23 @@ export interface FlowCanvasProps<TNode extends EntityRow = EntityRow, TEdge exte
   edges: TEdge[];
   /** `FlowNodeType[] nodeTypes` */
   nodeTypes: FlowNodeType[];
-  /** `string? typeField` */
+  /** `Func<TNode, string>? typeField` — the KEY of the row member the app's selector names — read it as `row[key]` */
   typeField?: string;
-  /** `string xField` — OPTIONAL: a default is not sent, so apply it in the shim */
+  /** `Func<TNode, double> xField` — the KEY of the row member the app's selector names — read it as `row[key]` — OPTIONAL: a default is not sent, so apply it in the shim */
   xField?: string;
-  /** `string yField` — OPTIONAL: a default is not sent, so apply it in the shim */
+  /** `Func<TNode, double> yField` — the KEY of the row member the app's selector names — read it as `row[key]` — OPTIONAL: a default is not sent, so apply it in the shim */
   yField?: string;
-  /** `string sourceField` — OPTIONAL: a default is not sent, so apply it in the shim */
+  /** `Func<TEdge, object> sourceField` — the KEY of the row member the app's selector names — read it as `row[key]` — OPTIONAL: a default is not sent, so apply it in the shim */
   sourceField?: string;
-  /** `string targetField` — OPTIONAL: a default is not sent, so apply it in the shim */
+  /** `Func<TEdge, object> targetField` — the KEY of the row member the app's selector names — read it as `row[key]` — OPTIONAL: a default is not sent, so apply it in the shim */
   targetField?: string;
-  /** `string? sourcePortField` */
+  /** `Func<TEdge, string>? sourcePortField` — the KEY of the row member the app's selector names — read it as `row[key]` */
   sourcePortField?: string;
-  /** `string? targetPortField` */
+  /** `Func<TEdge, string>? targetPortField` — the KEY of the row member the app's selector names — read it as `row[key]` */
   targetPortField?: string;
-  /** `string? labelField` */
+  /** `Func<TNode, string>? labelField` — the KEY of the row member the app's selector names — read it as `row[key]` */
   labelField?: string;
-  /** `string? edgeLabelField` */
+  /** `Func<TEdge, string>? edgeLabelField` — the KEY of the row member the app's selector names — read it as `row[key]` */
   edgeLabelField?: string;
   /** `bool readOnly` — OPTIONAL: a default is not sent, so apply it in the shim */
   readOnly?: boolean;
@@ -151,9 +154,9 @@ export interface FlowCanvasProps<TNode extends EntityRow = EntityRow, TEdge exte
   autoLayout?: string;
   /** `string layoutDirection` — one of: auto, right, down, left, up — OPTIONAL: a default is not sent, so apply it in the shim */
   layoutDirection?: string;
-  /** `string initialField` — OPTIONAL: a default is not sent, so apply it in the shim */
+  /** `Func<TNode, bool> initialField` — the KEY of the row member the app's selector names — read it as `row[key]` — OPTIONAL: a default is not sent, so apply it in the shim */
   initialField?: string;
-  /** `string terminalField` — OPTIONAL: a default is not sent, so apply it in the shim */
+  /** `Func<TNode, bool> terminalField` — the KEY of the row member the app's selector names — read it as `row[key]` — OPTIONAL: a default is not sent, so apply it in the shim */
   terminalField?: string;
   /** `string[] mainPath` — OPTIONAL: a default is not sent, so apply it in the shim */
   mainPath?: string[];
@@ -186,6 +189,12 @@ export interface FlowCanvasHost<TNode extends EntityRow = EntityRow, TEdge exten
   emit(event: "nodeRemoved", node: TNode): void;
   emit(event: "nodeSelected", node: TNode): void;
   emit(event: "selectionChanged", nodes: TNode[], edges: TEdge[]): void;
+
+  /** ONE user act: every event raised inside `act`, and until the promise it answers settles, is ONE undo
+   *  step on the page, named `label`. Events raised in one synchronous turn are one step already; this is
+   *  for a gesture that spans turns (a drag that emits as it goes). Optional, so on an older host:
+   *  `if (host.batch) host.batch(label, act); else act();` */
+  batch?(label: string, act: () => void | Promise<unknown>): void;
 
   /** The app's design tokens — this control is `headless`, so it renders through the app's theme. */
   tokens: TokenScope;

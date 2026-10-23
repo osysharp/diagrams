@@ -62,7 +62,7 @@ component Board() {
 
   render {
     Box(h: "400px") {
-      FlowCanvas(nodes: cards, edges: links, nodeTypes: CardTypes(), labelField: "Title") { c => Text(c.Title); }
+      FlowCanvas(nodes: cards, edges: links, nodeTypes: CardTypes(), labelField: n => n.Title) { c => Text(c.Title); }
     }
   }
 }
@@ -75,9 +75,9 @@ component SupportPicture() {
         nodes: Support.Graph.States,
         edges: Support.Graph.Transitions,
         nodeTypes: CardTypes(),
-        sourceField: "From",
-        targetField: "To",
-        labelField: "Label",
+        sourceField: e => e.From,
+        targetField: e => e.To,
+        labelField: n => n.Label,
         readOnly: true,
         autoLayout: always,
         highlighted: ["Open"]
