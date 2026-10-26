@@ -157,3 +157,68 @@ is proven in a real Chromium browser against a demo app.
   built from `layout.ts`), both built by `npm run chunks`
 - Licences: `LICENSE` (the kit is MIT; the bundled MIT/ISC/BSD-3 texts are reproduced there)
 - Package: `Osysharp.Diagrams` 0.x (preview)
+
+## Examples
+
+Taken from this package's own tests, which compile and run on every release.
+
+```osy
+using Osysharp.Diagrams;
+using Osysharp.Workflow;
+
+[Test]
+void a_workflow_graph_holds_every_state_and_every_transition() {
+  var g = Support.Graph;
+  Assert.Equal(4, g.States.Count());
+  Assert.Equal("In progress", g.States.Where(s => s.Name == "Working").Select(s => s.Label).First());
+  Assert.True(g.States.Where(s => s.Name == "Open").Select(s => s.IsInitial).First());
+  Assert.Equal("Success", g.States.Where(s => s.Name == "Done").Select(s => s.Outcome).First());
+  Assert.Equal(4, g.Transitions.Count());
+  Assert.Equal(2, g.Transitions.Count(t => t.To == "Dropped"));    // `on Drop`, from Open and from Working
+}
+```
+
+From [`tests/flow.test.osy`](tests/flow.test.osy).
+
+```osy
+using Osysharp.Diagrams;
+using Osysharp.Workflow;
+
+[Test(ThreeCards)]
+void every_row_is_a_node_and_nothing_starts_selected() {
+  Ui.Visit("/board");
+  Assert.Probe("FlowCanvas", "nodes", 3);
+  Assert.Probe("FlowCanvas", "selection", 0);
+}
+```
+
+From [`tests/flow.test.osy`](tests/flow.test.osy).
+
+```osy
+using Osysharp.Diagrams;
+
+[Test]
+void the_supplier_qualification_is_five_ranks_with_no_crossing() {
+  Ui.Visit("/pictures/supplier");
+  Assert.Probe("FlowCanvas", "nodes", 8);
+  Assert.Probe("FlowCanvas", "edges", 11);
+  Assert.Probe("FlowCanvas", "ranks", 5);
+  Assert.Probe("FlowCanvas", "mainPath", "Screening > Assessing > ByHand > Deciding > Approved");
+  Assert.Probe("FlowCanvas", "crossings", 0);
+  Assert.Probe("FlowCanvas", "returns", 0);
+  Sound();
+  Photograph("supplier");
+}
+```
+
+From [`tests/layout.test.osy`](tests/layout.test.osy).
+
+## Learn more
+
+- [Osysharp.Diagrams in the package catalogue](https://osysharp.com/packages/#osysharp-diagrams)
+- [The Osy# reference](https://osysharp.com/reference/) — the language, the runtime and every kit
+- [`llms-full.txt`](https://osysharp.com/llms-full.txt) — the whole reference and specification as one Markdown file, for a coding agent
+
+## Licence
+
+MIT — see [`LICENSE`](LICENSE). Third-party components keep their own terms: see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
