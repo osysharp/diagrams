@@ -260,7 +260,12 @@
 }
 .osy-flow__node.visited::after { content: "\2713"; background: var(--colors-primary, Highlight); }
 .osy-flow__node.failed::after { content: "!"; background: var(--colors-danger, var(--colors-borderdanger, currentColor)); }
-.osy-flow.has-run .osy-flow__node:not(.current):not(.visited):not(.failed) > .osy-flow__body { opacity: 0.72; }
+/* A state the run has not reached steps back by its frame, never by its words: what a node says is the app's, and
+   its contrast is the app's to keep (WCAG AA), so nothing here fades it. */
+.osy-flow.has-run .osy-flow__node:not(.current):not(.visited):not(.failed) {
+  outline: 1.5px dashed color-mix(in srgb, currentColor 32%, transparent);
+  outline-offset: 2px;
+}
 .osy-flow.has-run .osy-flow__edge:not(.taken) .osy-flow__edge-path { stroke: color-mix(in srgb, currentColor 28%, transparent); stroke-width: 1.25; }
 .osy-flow.has-run .osy-flow__edge:not(.taken) .osy-flow__edge-arrow { fill: color-mix(in srgb, currentColor 36%, transparent); }
 .osy-flow__edge.taken .osy-flow__edge-path { stroke: var(--colors-primary, Highlight); stroke-width: 2.75; }

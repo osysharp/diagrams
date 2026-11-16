@@ -6,7 +6,7 @@
   "controls": [
     {
       "name": "FlowCanvas",
-      "hash": "223d6bc1ecdc251d26ecfad6397ffa76f3ccf30ffe4ed02d5042d0b5e7dce864",
+      "hash": "cbf9053d6d7e14b3acd527f65c520b5e13cc5aa7d03c20d00551fb20919bc10e",
       "file": "flow.js",
       "contentType": "text/javascript",
       "source": "flow.ts",
